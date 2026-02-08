@@ -18,3 +18,6 @@ Unlike standard SMS apps, this tool aggregates all image and video attachments i
 **WARNING:** This app is very untested and pre-alpha it's very likely you can and will accidentally delete text messages, pictures, and videos from your system level SMS/MMS storage that you don't intent to use at your own RISK.
 
 **TLDR:** I made this app because I was tired of the fact Google Messages doesn't have a way to bulk delete old pictures and videos and there wasn't a good way to do it and after a few months the system level message storage was well over 12GB but I've had it get even bigger than that over time. So this was mostly to solve my own problem but I thought I'd share it.
+
+Requirement to use the app:
+To use this app you will have to temporarily set the app as the default SMS app since this is the only way to access the message storage. You will not be able to text while it is deleting the images/videos and sometimes this can take a while. i did make it work in the background with a notification though.
