@@ -15,6 +15,7 @@ import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
@@ -125,24 +126,34 @@ import java.time.format.DateTimeFormatter
 import java.util.Locale
 import java.util.UUID
 
+/** UI model for a single media item found in MMS. */
 data class MediaItem(val uri: Uri, val date: Long, val mimeType: String, val size: Long = 0)
+
+/** Groups media items by month for the UI grid. */
 data class GroupedMediaItems(val groupTitle: String, val items: List<MediaItem>, val uris: Set<Uri>)
 
+/** Sealed class representing different types of deletion operations. */
 sealed class DeleteAction {
     data class BySelection(val uris: Set<Uri>) : DeleteAction()
     object EmptyMessages : DeleteAction()
 }
 
+/** Enum for top-level navigation tabs. */
 enum class AppTab { CLEANER, TRASH }
+
+/** Enum for filtering media types in the cleaner view. */
 enum class MediaTypeFilter { ALL, IMAGES, VIDEOS }
 
 class MainActivity : ComponentActivity() {
 
+    // Tracks if the app is currently the system's default SMS app.
     private var isDefault by mutableStateOf(false)
 
+    // Result launcher for the 'Set as Default SMS' system dialog.
     private val roleRequestLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
-    ) { isDefault = isDefaultSmsApp()
+    ) { 
+        isDefault = isDefaultSmsApp()
         if (isDefault) {
             Toast.makeText(this, "Now default SMS app!", Toast.LENGTH_LONG).show()
         } else {
@@ -152,7 +163,10 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        WindowCompat.setDecorFitsSystemWindows(window, false)
+        
+        // Modern edge-to-edge support for API 35+
+        enableEdgeToEdge()
+
         isDefault = isDefaultSmsApp()
 
         setContent {
@@ -170,9 +184,11 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        // Re-check status when user returns to the app
         isDefault = isDefaultSmsApp()
     }
 
+    /** Checks if this app is the current default SMS provider. */
     private fun isDefaultSmsApp(): Boolean {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             val roleManager = getSystemService(RoleManager::class.java)
@@ -182,6 +198,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /** Launches the system request to become the default SMS app. */
     private fun requestDefaultSmsRole() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             val roleManager = getSystemService(RoleManager::class.java)
@@ -198,12 +215,14 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /** Opens the system settings for default app management. */
     private fun openDefaultSmsSettings() {
         val intent = Intent(android.provider.Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS)
         startActivity(intent)
     }
 }
 
+/** Main entry point for the Compose UI. */
 @OptIn(
     ExperimentalPermissionsApi::class,
     androidx.compose.foundation.ExperimentalFoundationApi::class,
@@ -220,11 +239,13 @@ fun SmsAppScreen(
     val coroutineScope = rememberCoroutineScope()
     val workManager = remember { WorkManager.getInstance(context) }
     
+    // Data layer handles
     val database = remember { AppDatabase.getDatabase(context) }
     val trashDao = database.trashDao()
     val trashedItems by trashDao.getAllTrashedItems().collectAsState(initial = emptyList())
     val totalTrashedSize by trashDao.getTotalTrashedSize().collectAsState(initial = 0L)
 
+    // SMS Permissions state
     val smsPermissionsState = rememberMultiplePermissionsState(
         listOf(
             android.Manifest.permission.READ_SMS,
@@ -232,12 +253,13 @@ fun SmsAppScreen(
         )
     )
 
+    // UI State
     var currentTab by remember { mutableStateOf(AppTab.CLEANER) }
     var mediaList by remember { mutableStateOf<List<MediaItem>>(emptyList()) }
     var isRefreshing by remember { mutableStateOf(false) }
-
     var mediaTypeFilter by remember { mutableStateOf(MediaTypeFilter.ALL) }
 
+    // Logic to filter the media list based on user selection
     val filteredMediaList = remember(mediaList, mediaTypeFilter) {
         when (mediaTypeFilter) {
             MediaTypeFilter.IMAGES -> mediaList.filter { it.mimeType.startsWith("image/") }
@@ -246,6 +268,7 @@ fun SmsAppScreen(
         }
     }
 
+    // Logic to group media by month for the grid headers
     val groupedMedia = remember(filteredMediaList) {
         filteredMediaList.groupBy {
             val date = LocalDateTime.ofInstant(Instant.ofEpochMilli(it.date), ZoneId.systemDefault())
@@ -257,37 +280,37 @@ fun SmsAppScreen(
             }
     }
 
+    // Interaction State
     var showConfirmDeleteDialog by remember { mutableStateOf(false) }
     var deleteAction by remember { mutableStateOf<DeleteAction?>(null) }
     var selectionMode by remember { mutableStateOf(false) }
     var selectedItems by remember { mutableStateOf<Set<Uri>>(emptySet()) }
     var deleteAttachmentsOnly by remember { mutableStateOf(false) }
 
-    // State for deletion progress
+    // Background Work State
     var showDeleteProgressScreen by remember { mutableStateOf(false) }
     var showCancelledDialog by remember { mutableStateOf(false) }
     var currentWorkId by remember { mutableStateOf<UUID?>(null) }
-    
     val deletionLog = remember { mutableStateListOf<String>() }
 
+    // Observe WorkManager progress
     val workInfoState = remember(currentWorkId) {
         currentWorkId?.let { workManager.getWorkInfoByIdLiveData(it) }
     }?.observeAsState()
     
     val workInfo = workInfoState?.value
-
     var deletedCount by remember { mutableStateOf(0) }
     var totalToDelete by remember { mutableStateOf(0) }
 
+    // Specialized ImageLoader for Video Thumbnails
     val imageLoader = remember {
         ImageLoader.Builder(context)
-            .components {
-                add(VideoFrameDecoder.Factory())
-            }
+            .components { add(VideoFrameDecoder.Factory()) }
             .crossfade(true)
             .build()
     }
 
+    /** Refresh media items from system storage. */
     fun updateMedia() {
         coroutineScope.launch {
             isRefreshing = true
@@ -296,6 +319,7 @@ fun SmsAppScreen(
         }
     }
 
+    // Handle background work updates
     LaunchedEffect(workInfo) {
         if (workInfo != null) {
             val progress = workInfo.progress
@@ -331,12 +355,14 @@ fun SmsAppScreen(
         }
     }
 
+    // Auto-refresh when permissions and default role are granted
     LaunchedEffect(smsPermissionsState.allPermissionsGranted, isDefault) {
         if (smsPermissionsState.allPermissionsGranted && isDefault) {
             updateMedia()
         }
     }
 
+    // Full screen overlay for trashing progress
     if (showDeleteProgressScreen) {
         DeletionProgressOverlay(
             totalToDelete = totalToDelete,
@@ -375,6 +401,7 @@ fun SmsAppScreen(
                     actions = {
                         if (isDefault && smsPermissionsState.allPermissionsGranted) {
                             if (currentTab == AppTab.CLEANER && !selectionMode) {
+                                // Filtering Buttons
                                 IconButton(onClick = { mediaTypeFilter = MediaTypeFilter.ALL }) {
                                     Icon(Icons.Default.PhotoLibrary, "All Media", tint = if (mediaTypeFilter == MediaTypeFilter.ALL) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
@@ -388,6 +415,7 @@ fun SmsAppScreen(
                                     Icon(Icons.Default.Refresh, contentDescription = "Refresh")
                                 }
                             } else if (currentTab == AppTab.TRASH) {
+                                // Empty Trash Button
                                 IconButton(onClick = {
                                     coroutineScope.launch {
                                         val trashDir = File(context.filesDir, "trash")
@@ -409,7 +437,7 @@ fun SmsAppScreen(
                     }
                 )
 
-                // Selection Bar under TopAppBar
+                // Selection Action Bar
                 AnimatedVisibility(
                     visible = selectionMode && currentTab == AppTab.CLEANER,
                     enter = expandVertically(),
@@ -488,10 +516,13 @@ fun SmsAppScreen(
     ) { padding ->
         Box(modifier = Modifier.fillMaxSize().padding(padding)) {
             if (!isDefault) {
+                // If not default app, show explanation screen
                 DefaultAppExplanation(onRequestDefaultSms)
             } else if (!smsPermissionsState.allPermissionsGranted) {
+                // If no permissions, show request screen
                 PermissionRequestScreen(smsPermissionsState)
             } else {
+                // Main content
                 when (currentTab) {
                     AppTab.CLEANER -> CleanerScreen(
                         groupedMedia = groupedMedia,
@@ -512,6 +543,7 @@ fun SmsAppScreen(
         }
     }
 
+    // Confirmation dialog for deletion
     if (showConfirmDeleteDialog) {
         ConfirmDeletionDialog(
             deleteAction = deleteAction,
@@ -532,6 +564,7 @@ fun SmsAppScreen(
         )
     }
 
+    // Alert for partial cancellations
     if (showCancelledDialog) {
         AlertDialog(
             onDismissRequest = { showCancelledDialog = false },
@@ -542,6 +575,7 @@ fun SmsAppScreen(
     }
 }
 
+/** Component showing real-time progress of moving files to trash. */
 @Composable
 fun DeletionProgressOverlay(
     totalToDelete: Int,
@@ -619,6 +653,7 @@ fun DeletionProgressOverlay(
     }
 }
 
+/** Onboarding screen explaining why default SMS role is needed. */
 @Composable
 fun DefaultAppExplanation(onRequestDefaultSms: () -> Unit) {
     Column(
@@ -638,6 +673,7 @@ fun DefaultAppExplanation(onRequestDefaultSms: () -> Unit) {
     }
 }
 
+/** Onboarding screen for runtime permissions. */
 @OptIn(ExperimentalPermissionsApi::class)
 @Composable
 fun PermissionRequestScreen(state: com.google.accompanist.permissions.MultiplePermissionsState) {
@@ -651,6 +687,7 @@ fun PermissionRequestScreen(state: com.google.accompanist.permissions.MultiplePe
     }
 }
 
+/** Grid view showing all media items found in MMS messages. */
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun CleanerScreen(
@@ -673,6 +710,7 @@ fun CleanerScreen(
             modifier = Modifier.fillMaxSize()
         ) {
             groupedMedia.forEach { group ->
+                // Group Header (Month/Year)
                 item(span = { GridItemSpan(maxLineSpan) }) {
                     Text(
                         text = group.groupTitle,
@@ -680,12 +718,14 @@ fun CleanerScreen(
                         modifier = Modifier
                             .padding(8.dp)
                             .clickable {
+                                // Bulk select group logic
                                 if (!selectionMode) onSelectionModeChange(true)
                                 val allSelected = selectedItems.containsAll(group.uris)
                                 onSelectedItemsChange(if (allSelected) selectedItems - group.uris else selectedItems + group.uris)
                             }
                     )
                 }
+                // Media Grid Items
                 items(group.items, key = { it.uri.toString() }) { item ->
                     val dateFormat = remember { DateTimeFormatter.ofPattern("MM/dd HH:mm", Locale.getDefault()) }
                     val request = ImageRequest.Builder(context).data(item.uri).size(300, 300).build()
@@ -727,6 +767,7 @@ fun CleanerScreen(
     }
 }
 
+/** List view showing items currently in the app's internal trash. */
 @Composable
 fun TrashScreen(
     trashedItems: List<TrashedItem>,
@@ -750,6 +791,7 @@ fun TrashScreen(
                         val date = LocalDateTime.ofInstant(Instant.ofEpochMilli(item.trashedDate), ZoneId.systemDefault())
                         Text("Trashed: ${date.format(DateTimeFormatter.ofPattern("MMM dd, HH:mm"))}", style = MaterialTheme.typography.bodySmall)
                     }
+                    // Restore to Gallery Button
                     IconButton(onClick = {
                         coroutineScope.launch {
                             restoreToGallery(context, item)
@@ -758,6 +800,7 @@ fun TrashScreen(
                             Toast.makeText(context, "Restored to Gallery", Toast.LENGTH_SHORT).show()
                         }
                     }) { Icon(Icons.Default.Restore, "Restore") }
+                    // Delete Permanently Button
                     IconButton(onClick = {
                         coroutineScope.launch {
                             trashDao.delete(item)
@@ -771,6 +814,7 @@ fun TrashScreen(
     }
 }
 
+/** Dialog for confirming cleanup actions. */
 @Composable
 fun ConfirmDeletionDialog(
     deleteAction: DeleteAction?,
@@ -802,6 +846,7 @@ fun ConfirmDeletionDialog(
     )
 }
 
+/** Helper function to prepare data and enqueue a DeletionWorker. */
 private fun startDeletion(
     context: Context,
     workManager: WorkManager,
@@ -828,6 +873,10 @@ private fun startDeletion(
     onShow()
 }
 
+/** 
+ * Moves an item from internal trash back to the public gallery storage.
+ * (Note: Does not restore it back to the SMS app, but makes it visible in Photos/Gallery).
+ */
 private suspend fun restoreToGallery(context: Context, item: TrashedItem) = withContext(Dispatchers.IO) {
     val file = File(context.filesDir, "trash/${item.fileName}")
     if (!file.exists()) return@withContext
@@ -856,35 +905,45 @@ private suspend fun restoreToGallery(context: Context, item: TrashedItem) = with
     }
 }
 
+/** 
+ * Queries the system Telephony provider to find all media attachments in MMS messages.
+ */
 private suspend fun loadMmsMedia(contentResolver: ContentResolver): List<MediaItem> = withContext(Dispatchers.IO) {
     val messageDates = mutableMapOf<Long, Long>()
+    // First, map MMS message IDs to their dates
     contentResolver.query(Telephony.Mms.CONTENT_URI, arrayOf(Telephony.Mms._ID, Telephony.Mms.DATE), null, null, null)?.use { cursor ->
         val idCol = cursor.getColumnIndexOrThrow(Telephony.Mms._ID)
         val dateCol = cursor.getColumnIndexOrThrow(Telephony.Mms.DATE)
         while (cursor.moveToNext()) {
             val rawDate = cursor.getLong(dateCol)
+            // Fix for dates stored in seconds vs milliseconds
             messageDates[cursor.getLong(idCol)] = if (rawDate < 10_000_000_000L) rawDate * 1000 else rawDate
         }
     }
 
     val mediaItems = mutableListOf<MediaItem>()
+    // Next, query all 'parts' that are images or videos
     val selection = "${Telephony.Mms.Part.CONTENT_TYPE} LIKE 'image/%' OR ${Telephony.Mms.Part.CONTENT_TYPE} LIKE 'video/%'"
     contentResolver.query(Telephony.Mms.CONTENT_URI.buildUpon().appendPath("part").build(), arrayOf(Telephony.Mms.Part._ID, Telephony.Mms.Part.MSG_ID, Telephony.Mms.Part.CONTENT_TYPE, "_data"), selection, null, null)?.use { cursor ->
         val idCol = cursor.getColumnIndexOrThrow(Telephony.Mms.Part._ID)
         val msgIdCol = cursor.getColumnIndexOrThrow(Telephony.Mms.Part.MSG_ID)
         val typeCol = cursor.getColumnIndexOrThrow(Telephony.Mms.Part.CONTENT_TYPE)
-        val dataCol = cursor.getColumnIndex("_data")
         while (cursor.moveToNext()) {
             val partId = cursor.getLong(idCol)
             val msgId = cursor.getLong(msgIdCol)
             val date = messageDates[msgId] ?: 0L
-            val size = if (dataCol != -1) {
-                val path = cursor.getString(dataCol)
-                if (path != null) File(path).length() else 0L
-            } else 0L
             val uri = Telephony.Mms.CONTENT_URI.buildUpon().appendPath("part").appendPath(partId.toString()).build()
-            mediaItems.add(MediaItem(uri, date, cursor.getString(typeCol), size))
+            
+            // Efficiently get the file size using AVD
+            val size = try {
+                contentResolver.openAssetFileDescriptor(uri, "r")?.use { it.length } ?: 0L
+            } catch (e: Exception) {
+                0L
+            }
+            
+            mediaItems.add(MediaItem(uri, date, cursor.getString(typeCol), if (size < 0) 0L else size))
         }
     }
+    // Sort newest first
     mediaItems.sortedByDescending { it.date }
 }

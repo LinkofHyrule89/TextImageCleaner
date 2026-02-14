@@ -23,6 +23,10 @@ import java.io.File
 import java.io.FileOutputStream
 import java.util.UUID
 
+/**
+ * Background worker responsible for the heavy lifting of moving media from system MMS storage
+ * to the app's internal trash folder and then deleting it from the system.
+ */
 class DeletionWorker(appContext: Context, params: WorkerParameters) :
     CoroutineWorker(appContext, params) {
 
@@ -37,9 +41,13 @@ class DeletionWorker(appContext: Context, params: WorkerParameters) :
         const val COMPLETION_CHANNEL_ID = "deletion_completion_channel"
         const val NOTIFICATION_ID = 1
         const val COMPLETION_NOTIFICATION_ID = 2
+        
+        // Input Data Keys
         const val KEY_URIS_FILE_PATH = "uris_file_path"
         const val KEY_DELETE_ATTACHMENTS_ONLY = "delete_attachments_only"
         const val KEY_DELETE_EMPTY_MESSAGES = "delete_empty_messages"
+        
+        // Progress Keys
         const val KEY_TOTAL_COUNT = "total_count"
         const val KEY_DELETED_COUNT = "deleted_count"
         const val KEY_LAST_ITEM_INFO = "last_item_info"
@@ -51,6 +59,7 @@ class DeletionWorker(appContext: Context, params: WorkerParameters) :
         val filePath = inputData.getString(KEY_URIS_FILE_PATH)
 
         createNotificationChannels()
+        // Initialize foreground notification for background execution
         setForeground(createForegroundInfo(0, 0, true))
 
         var totalVerifiedDeleted = 0
@@ -58,9 +67,11 @@ class DeletionWorker(appContext: Context, params: WorkerParameters) :
         return withContext(Dispatchers.IO) {
             try {
                 if (deleteEmpty) {
+                    // Scenario 1: Just cleaning up empty message threads
                     val count = deleteEmptyMessages()
                     showCompletionNotification(count)
                 } else if (filePath != null) {
+                    // Scenario 2: Trashing specific media items
                     val file = File(filePath)
                     if (file.exists()) {
                         val uris = file.readLines().map { Uri.parse(it) }
@@ -71,8 +82,10 @@ class DeletionWorker(appContext: Context, params: WorkerParameters) :
                             if (isStopped) return@forEachIndexed
                             
                             val itemInfo = getItemInfo(uri)
+                            // First, move the file to internal storage and record in DB
                             val trashed = trashItem(uri)
                             if (trashed) {
+                                // Only delete from system if the trashing was successful
                                 val success = if (deleteAttachmentsOnly) {
                                     deleteAttachmentSingle(uri)
                                 } else {
@@ -81,6 +94,7 @@ class DeletionWorker(appContext: Context, params: WorkerParameters) :
                                 if (success) totalVerifiedDeleted++
                             }
 
+                            // Update progress periodically
                             if (index % 5 == 0 || index == total - 1) {
                                 setForeground(createForegroundInfo(total, index + 1, false))
                                 setProgress(workDataOf(
@@ -96,9 +110,10 @@ class DeletionWorker(appContext: Context, params: WorkerParameters) :
                 showCompletionNotification(totalVerifiedDeleted) 
                 Result.success()
             } catch (e: Exception) {
-                Log.e("DeletionWorker", "Error deleting items", e)
+                Log.e("DeletionWorker", "Error during cleanup", e)
                 Result.failure()
             } finally {
+                // Cleanup temporary URI file
                 if (filePath != null) {
                     val file = File(filePath)
                     if (file.exists()) file.delete()
@@ -107,15 +122,15 @@ class DeletionWorker(appContext: Context, params: WorkerParameters) :
         }
     }
 
+    /** Returns basic display info for the item being processed. */
     private fun getItemInfo(uri: Uri): String {
-        return try {
-            // Quick check for display in log
-            "Item ${uri.lastPathSegment}"
-        } catch (e: Exception) {
-            "Unknown Item"
-        }
+        return "Item ${uri.lastPathSegment}"
     }
 
+    /**
+     * Copies a media file from the system MMS provider to internal storage
+     * and creates a record in the TrashedItem database.
+     */
     private suspend fun trashItem(uri: Uri): Boolean {
         return try {
             val contentResolver = applicationContext.contentResolver
@@ -126,6 +141,7 @@ class DeletionWorker(appContext: Context, params: WorkerParameters) :
             val date = System.currentTimeMillis()
             var size = 0L
 
+            // Get metadata from system provider
             contentResolver.query(uri, null, null, null, null)?.use { cursor ->
                 if (cursor.moveToFirst()) {
                     val ctCol = cursor.getColumnIndex(Telephony.Mms.Part.CONTENT_TYPE)
@@ -136,6 +152,7 @@ class DeletionWorker(appContext: Context, params: WorkerParameters) :
                 }
             }
 
+            // Perform the physical copy
             contentResolver.openInputStream(uri)?.use { input ->
                 FileOutputStream(trashedFile).use { output ->
                     val buffer = ByteArray(8192)
@@ -148,6 +165,7 @@ class DeletionWorker(appContext: Context, params: WorkerParameters) :
             }
 
             if (size > 0) {
+                // Save metadata to Room
                 val item = TrashedItem(
                     uriString = uri.toString(),
                     fileName = trashedFile.name,
@@ -168,6 +186,7 @@ class DeletionWorker(appContext: Context, params: WorkerParameters) :
         }
     }
 
+    /** Deletes just the media attachment, leaving the text message shell. */
     private fun deleteAttachmentSingle(uri: Uri): Boolean {
         return try {
             applicationContext.contentResolver.delete(uri, null, null) > 0
@@ -176,12 +195,14 @@ class DeletionWorker(appContext: Context, params: WorkerParameters) :
         }
     }
 
+    /** Deletes the entire MMS message that contains this media part. */
     private fun deleteMessageForPart(uri: Uri): Boolean {
         return try {
             val partId = uri.lastPathSegment ?: return false
             var msgId: Long? = null
             val contentUri = Uri.parse("content://mms/part")
             
+            // Find the parent message ID
             applicationContext.contentResolver.query(
                 contentUri,
                 arrayOf(Telephony.Mms.Part.MSG_ID),
@@ -194,6 +215,7 @@ class DeletionWorker(appContext: Context, params: WorkerParameters) :
                 }
             }
 
+            // Delete the message
             msgId?.let {
                 applicationContext.contentResolver.delete(
                     Telephony.Mms.CONTENT_URI,
@@ -206,6 +228,7 @@ class DeletionWorker(appContext: Context, params: WorkerParameters) :
         }
     }
 
+    /** Creates the foreground info required to keep the worker running. */
     private fun createForegroundInfo(total: Int, progress: Int, indeterminate: Boolean): ForegroundInfo {
         val title = "Trashing Media"
         val content = if (indeterminate) "Preparing..." else "Moving to Trash... ($progress / $total)"
@@ -235,6 +258,7 @@ class DeletionWorker(appContext: Context, params: WorkerParameters) :
         }
     }
 
+    /** Shows a final notification when the operation completes. */
     private fun showCompletionNotification(deletedCount: Int) {
         val intent = Intent(applicationContext, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
@@ -258,6 +282,7 @@ class DeletionWorker(appContext: Context, params: WorkerParameters) :
         notificationManager.notify(COMPLETION_NOTIFICATION_ID, notification)
     }
 
+    /** Initializes notification channels for O+ devices. */
     private fun createNotificationChannels() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val progressChannel = NotificationChannel(
@@ -278,6 +303,7 @@ class DeletionWorker(appContext: Context, params: WorkerParameters) :
         }
     }
 
+    /** Deletes SMS message records that have no body text. */
     private fun deleteEmptyMessages(): Int {
         val selection = "${Telephony.Sms.BODY} IS NULL OR ${Telephony.Sms.BODY} = ''"
         return applicationContext.contentResolver.delete(Telephony.Sms.CONTENT_URI, selection, null)
