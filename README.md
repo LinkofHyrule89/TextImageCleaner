@@ -21,3 +21,9 @@ Unlike standard SMS apps, this tool aggregates all image and video attachments i
 
 Requirement to use the app:
 To use this app you will have to temporarily set the app as the default SMS app since this is the only way to access the message storage. You will not be able to text while it is deleting the images/videos and sometimes this can take a while. i did make it work in the background with a notification though.
+
+## License
+
+This project is licensed under the AGPL-3.0 License. See the [LICENSE](LICENSE) file for details.
+
+For commercial inquiries or alternative licensing, please contact the project maintainers.
