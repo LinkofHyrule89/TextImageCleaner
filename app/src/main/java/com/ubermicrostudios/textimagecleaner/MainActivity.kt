@@ -17,6 +17,8 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -45,14 +47,15 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteForever
-import androidx.compose.material.icons.filled.Event
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.outlined.CleaningServices
+import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -93,7 +96,6 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowCompat
@@ -132,6 +134,7 @@ sealed class DeleteAction {
 }
 
 enum class AppTab { CLEANER, TRASH }
+enum class MediaTypeFilter { ALL, IMAGES, VIDEOS }
 
 class MainActivity : ComponentActivity() {
 
@@ -231,15 +234,30 @@ fun SmsAppScreen(
 
     var currentTab by remember { mutableStateOf(AppTab.CLEANER) }
     var mediaList by remember { mutableStateOf<List<MediaItem>>(emptyList()) }
-    var groupedMedia by remember { mutableStateOf<List<GroupedMediaItems>>(emptyList()) }
     var isRefreshing by remember { mutableStateOf(false) }
 
-    var showDatePicker by remember { mutableStateOf(false) }
-    var showConfirmDeleteDialog by remember { mutableStateOf(false) }
-    var showReviewDialog by remember { mutableStateOf(false) }
-    var itemsToDelete by remember { mutableStateOf<List<MediaItem>>(emptyList()) }
-    var selectedItemsForDeletion by remember { mutableStateOf<Set<Uri>>(emptySet()) }
+    var mediaTypeFilter by remember { mutableStateOf(MediaTypeFilter.ALL) }
 
+    val filteredMediaList = remember(mediaList, mediaTypeFilter) {
+        when (mediaTypeFilter) {
+            MediaTypeFilter.IMAGES -> mediaList.filter { it.mimeType.startsWith("image/") }
+            MediaTypeFilter.VIDEOS -> mediaList.filter { it.mimeType.startsWith("video/") }
+            MediaTypeFilter.ALL -> mediaList
+        }
+    }
+
+    val groupedMedia = remember(filteredMediaList) {
+        filteredMediaList.groupBy {
+            val date = LocalDateTime.ofInstant(Instant.ofEpochMilli(it.date), ZoneId.systemDefault())
+            YearMonth.from(date)
+        }.toSortedMap(Comparator.reverseOrder())
+            .map { (yearMonth, items) ->
+                val title = yearMonth.format(DateTimeFormatter.ofPattern("MMMM yyyy", Locale.getDefault()))
+                GroupedMediaItems(title, items, items.map { it.uri }.toSet())
+            }
+    }
+
+    var showConfirmDeleteDialog by remember { mutableStateOf(false) }
     var deleteAction by remember { mutableStateOf<DeleteAction?>(null) }
     var selectionMode by remember { mutableStateOf(false) }
     var selectedItems by remember { mutableStateOf<Set<Uri>>(emptySet()) }
@@ -250,7 +268,6 @@ fun SmsAppScreen(
     var showCancelledDialog by remember { mutableStateOf(false) }
     var currentWorkId by remember { mutableStateOf<UUID?>(null) }
     
-    // Log for progress screen
     val deletionLog = remember { mutableStateListOf<String>() }
 
     val workInfoState = remember(currentWorkId) {
@@ -274,16 +291,7 @@ fun SmsAppScreen(
     fun updateMedia() {
         coroutineScope.launch {
             isRefreshing = true
-            val list = loadMmsMedia(contentResolver)
-            mediaList = list
-            groupedMedia = list.groupBy {
-                val date = LocalDateTime.ofInstant(Instant.ofEpochMilli(it.date), ZoneId.systemDefault())
-                YearMonth.from(date)
-            }.toSortedMap(Comparator.reverseOrder())
-                .map { (yearMonth, items) ->
-                    val title = yearMonth.format(DateTimeFormatter.ofPattern("MMMM yyyy", Locale.getDefault()))
-                    GroupedMediaItems(title, items, items.map { it.uri }.toSet())
-                }
+            mediaList = loadMmsMedia(contentResolver)
             isRefreshing = false
         }
     }
@@ -330,163 +338,136 @@ fun SmsAppScreen(
     }
 
     if (showDeleteProgressScreen) {
-        Scaffold { padding ->
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(padding),
-                contentAlignment = Alignment.Center
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(32.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Text(
-                        text = "Cleaning Up...",
-                        style = MaterialTheme.typography.headlineMedium,
-                        modifier = Modifier.padding(top = 32.dp, bottom = 24.dp)
-                    )
-                    
-                    LinearProgressIndicator(
-                        progress = { if (totalToDelete > 0) deletedCount.toFloat() / totalToDelete.toFloat() else 0f },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(8.dp),
-                    )
-                    
-                    Text(
-                        text = "$deletedCount / $totalToDelete items processed",
-                        style = MaterialTheme.typography.bodyLarge,
-                        modifier = Modifier.padding(top = 8.dp, bottom = 24.dp)
-                    )
-
-                    // Scrolling Log of deletions
-                    val listState = rememberLazyListState()
-                    LaunchedEffect(deletionLog.size) {
-                        if (deletionLog.isNotEmpty()) {
-                            listState.animateScrollToItem(deletionLog.size - 1)
-                        }
-                    }
-
-                    Card(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .weight(1f)
-                            .padding(bottom = 24.dp),
-                        colors = CardDefaults.cardColors(containerColor = Color.Black.copy(alpha = 0.05f))
-                    ) {
-                        LazyColumn(
-                            state = listState,
-                            modifier = Modifier.fillMaxSize().padding(8.dp)
-                        ) {
-                            items(deletionLog) { logEntry ->
-                                Text(
-                                    text = "Trashing: $logEntry",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = Color.Gray,
-                                    modifier = Modifier.padding(vertical = 2.dp)
-                                )
-                            }
-                        }
-                    }
-
-                    Text(
-                        text = "Items are being moved to the internal Trash Can for safety.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.padding(bottom = 24.dp)
-                    )
-
-                    Button(
-                        onClick = {
-                            currentWorkId?.let { workManager.cancelWorkById(it) }
-                        },
-                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
-                    ) {
-                        Text("Cancel Operation")
-                    }
-                }
-            }
-        }
+        DeletionProgressOverlay(
+            totalToDelete = totalToDelete,
+            deletedCount = deletedCount,
+            deletionLog = deletionLog,
+            onCancel = { currentWorkId?.let { workManager.cancelWorkById(it) } }
+        )
         return
     }
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { 
-                    Column {
-                        if (selectionMode) {
-                            Text("${selectedItems.size} selected")
-                        } else {
+            Column {
+                TopAppBar(
+                    title = { 
+                        Column {
                             Text(if (currentTab == AppTab.CLEANER) "Cleaner" else "Trash Can")
-                            if (currentTab == AppTab.CLEANER && mediaList.isNotEmpty()) {
-                                val totalSizeMb = mediaList.sumOf { it.size } / (1024 * 1024)
-                                Text("${mediaList.size} items • ${totalSizeMb}MB", style = MaterialTheme.typography.labelSmall)
+                            if (currentTab == AppTab.CLEANER) {
+                                val images = mediaList.filter { it.mimeType.startsWith("image/") }
+                                val videos = mediaList.filter { it.mimeType.startsWith("video/") }
+                                val imgSize = images.sumOf { it.size } / (1024 * 1024)
+                                val vidSize = videos.sumOf { it.size } / (1024 * 1024)
+                                
+                                val subtitle = when(mediaTypeFilter) {
+                                    MediaTypeFilter.ALL -> "Images: ${images.size} (${imgSize}MB) • Videos: ${videos.size} (${vidSize}MB)"
+                                    MediaTypeFilter.IMAGES -> "${images.size} Images • ${imgSize}MB"
+                                    MediaTypeFilter.VIDEOS -> "${videos.size} Videos • ${vidSize}MB"
+                                }
+                                Text(subtitle, style = MaterialTheme.typography.labelSmall)
                             } else if (currentTab == AppTab.TRASH) {
                                 val trashSizeMb = (totalTrashedSize ?: 0L) / (1024 * 1024)
                                 Text("${trashedItems.size} items • ${trashSizeMb}MB stored", style = MaterialTheme.typography.labelSmall)
                             }
                         }
-                    }
-                },
-                navigationIcon = {
-                    if (selectionMode) {
-                        IconButton(onClick = {
-                            selectionMode = false
-                            selectedItems = emptySet()
-                        }) {
-                            Icon(Icons.Default.Close, contentDescription = "Cancel Selection")
+                    },
+                    actions = {
+                        if (isDefault && smsPermissionsState.allPermissionsGranted) {
+                            if (currentTab == AppTab.CLEANER && !selectionMode) {
+                                IconButton(onClick = { mediaTypeFilter = MediaTypeFilter.ALL }) {
+                                    Icon(Icons.Default.PhotoLibrary, "All Media", tint = if (mediaTypeFilter == MediaTypeFilter.ALL) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                                IconButton(onClick = { mediaTypeFilter = MediaTypeFilter.IMAGES }) {
+                                    Icon(Icons.Default.Image, "Images Only", tint = if (mediaTypeFilter == MediaTypeFilter.IMAGES) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                                IconButton(onClick = { mediaTypeFilter = MediaTypeFilter.VIDEOS }) {
+                                    Icon(Icons.Default.Videocam, "Videos Only", tint = if (mediaTypeFilter == MediaTypeFilter.VIDEOS) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                                IconButton(onClick = { updateMedia() }) {
+                                    Icon(Icons.Default.Refresh, contentDescription = "Refresh")
+                                }
+                            } else if (currentTab == AppTab.TRASH) {
+                                IconButton(onClick = {
+                                    coroutineScope.launch {
+                                        val trashDir = File(context.filesDir, "trash")
+                                        trashDir.deleteRecursively()
+                                        trashDao.deleteAll()
+                                        Toast.makeText(context, "Trash Emptied", Toast.LENGTH_SHORT).show()
+                                    }
+                                }) {
+                                    Icon(Icons.Default.DeleteForever, contentDescription = "Empty Trash")
+                                }
+                            }
+                            
+                            if (!selectionMode) {
+                                IconButton(onClick = onRequestSystemDefaultSms) {
+                                    Icon(Icons.Default.Settings, contentDescription = "Change Default App")
+                                }
+                            }
                         }
                     }
-                },
-                actions = {
-                    if (isDefault && smsPermissionsState.allPermissionsGranted) {
-                        if (selectionMode) {
+                )
+
+                // Selection Bar under TopAppBar
+                AnimatedVisibility(
+                    visible = selectionMode && currentTab == AppTab.CLEANER,
+                    enter = expandVertically(),
+                    exit = shrinkVertically()
+                ) {
+                    val selectedItemsList = remember(selectedItems, mediaList) {
+                        mediaList.filter { it.uri in selectedItems }
+                    }
+                    val selectedSizeMb = selectedItemsList.sumOf { it.size } / (1024.0 * 1024.0)
+
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        shadowElevation = 8.dp,
+                        color = MaterialTheme.colorScheme.surfaceVariant
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 8.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                IconButton(onClick = {
+                                    selectionMode = false
+                                    selectedItems = emptySet()
+                                }) {
+                                    Icon(Icons.Default.Close, contentDescription = "Cancel Selection")
+                                }
+                                Column {
+                                    Text(
+                                        "${selectedItems.size} selected",
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Text(
+                                        String.format("%.2f MB to be freed", selectedSizeMb),
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
+                                }
+                            }
                             IconButton(onClick = {
-                                if (selectedItems.isNotEmpty()){
+                                if (selectedItems.isNotEmpty()) {
                                     deleteAction = DeleteAction.BySelection(selectedItems)
                                     showConfirmDeleteDialog = true
                                 }
                             }) {
-                                Icon(Icons.Default.Delete, contentDescription = "Move to Trash")
-                            }
-                        } else if (currentTab == AppTab.CLEANER) {
-                            IconButton(onClick = { showDatePicker = true }) {
-                                Icon(Icons.Default.Event, contentDescription = "Filter by Date")
-                            }
-                            IconButton(onClick = { updateMedia() }) {
-                                Icon(Icons.Default.Refresh, contentDescription = "Refresh")
-                            }
-                            IconButton(onClick = {
-                                deleteAction = DeleteAction.EmptyMessages
-                                showConfirmDeleteDialog = true
-                            }) {
-                                Icon(Icons.Outlined.CleaningServices, contentDescription = "Delete Empty Messages")
-                            }
-                        } else {
-                            IconButton(onClick = {
-                                coroutineScope.launch {
-                                    val trashDir = File(context.filesDir, "trash")
-                                    trashDir.deleteRecursively()
-                                    trashDao.deleteAll()
-                                    Toast.makeText(context, "Trash Emptied", Toast.LENGTH_SHORT).show()
-                                }
-                            }) {
-                                Icon(Icons.Default.DeleteForever, contentDescription = "Empty Trash")
-                            }
-                        }
-                        
-                        if (!selectionMode) {
-                            IconButton(onClick = onRequestSystemDefaultSms) {
-                                Icon(Icons.Default.Settings, contentDescription = "Change Default App")
+                                Icon(
+                                    Icons.Default.Delete, 
+                                    contentDescription = "Move to Trash", 
+                                    tint = MaterialTheme.colorScheme.error,
+                                    modifier = Modifier.size(32.dp)
+                                )
                             }
                         }
                     }
                 }
-            )
+            }
         },
         bottomBar = {
             NavigationBar {
@@ -531,54 +512,6 @@ fun SmsAppScreen(
         }
     }
 
-    // Dialogs...
-    if (showDatePicker) {
-        val dateRangePickerState = rememberDateRangePickerState()
-        DatePickerDialog(
-            onDismissRequest = { showDatePicker = false },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        showDatePicker = false
-                        val start = dateRangePickerState.selectedStartDateMillis
-                        val end = dateRangePickerState.selectedEndDateMillis
-                        if (start != null && end != null) {
-                            coroutineScope.launch {
-                                itemsToDelete = mediaList.filter { it.date in start..end }
-                                if (itemsToDelete.isNotEmpty()) {
-                                    selectedItemsForDeletion = itemsToDelete.map { it.uri }.toSet()
-                                    showReviewDialog = true
-                                } else {
-                                    Toast.makeText(context, "No items found", Toast.LENGTH_SHORT).show()
-                                }
-                            }
-                        }
-                    },
-                    enabled = dateRangePickerState.selectedStartDateMillis != null && dateRangePickerState.selectedEndDateMillis != null
-                ) { Text("OK") }
-            },
-            dismissButton = {
-                TextButton(onClick = { showDatePicker = false }) { Text("Cancel") }
-            }
-        ) {
-            DateRangePicker(state = dateRangePickerState)
-        }
-    }
-
-    if (showReviewDialog) {
-        ReviewItemsDialog(
-            items = itemsToDelete,
-            selectedUris = selectedItemsForDeletion,
-            onSelectedUrisChange = { selectedItemsForDeletion = it },
-            onConfirm = {
-                showReviewDialog = false
-                deleteAction = DeleteAction.BySelection(selectedItemsForDeletion)
-                showConfirmDeleteDialog = true
-            },
-            onDismiss = { showReviewDialog = false }
-        )
-    }
-
     if (showConfirmDeleteDialog) {
         ConfirmDeletionDialog(
             deleteAction = deleteAction,
@@ -606,6 +539,83 @@ fun SmsAppScreen(
             text = { Text("Operation cancelled. $deletedCount items were moved to Trash.") },
             confirmButton = { Button(onClick = { showCancelledDialog = false }) { Text("OK") } }
         )
+    }
+}
+
+@Composable
+fun DeletionProgressOverlay(
+    totalToDelete: Int,
+    deletedCount: Int,
+    deletionLog: List<String>,
+    onCancel: () -> Unit
+) {
+    Scaffold { padding ->
+        Box(
+            modifier = Modifier.fillMaxSize().padding(padding),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(
+                modifier = Modifier.fillMaxSize().padding(32.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    text = "Cleaning Up...",
+                    style = MaterialTheme.typography.headlineMedium,
+                    modifier = Modifier.padding(top = 32.dp, bottom = 24.dp)
+                )
+                
+                LinearProgressIndicator(
+                    progress = { if (totalToDelete > 0) deletedCount.toFloat() / totalToDelete.toFloat() else 0f },
+                    modifier = Modifier.fillMaxWidth().height(8.dp),
+                )
+                
+                Text(
+                    text = "$deletedCount / $totalToDelete items processed",
+                    style = MaterialTheme.typography.bodyLarge,
+                    modifier = Modifier.padding(top = 8.dp, bottom = 24.dp)
+                )
+
+                val listState = rememberLazyListState()
+                LaunchedEffect(deletionLog.size) {
+                    if (deletionLog.isNotEmpty()) {
+                        listState.animateScrollToItem(deletionLog.size - 1)
+                    }
+                }
+
+                Card(
+                    modifier = Modifier.fillMaxWidth().weight(1f).padding(bottom = 24.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color.Black.copy(alpha = 0.05f))
+                ) {
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier.fillMaxSize().padding(8.dp)
+                    ) {
+                        items(deletionLog) { logEntry ->
+                            Text(
+                                text = "Trashing: $logEntry",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color.Gray,
+                                modifier = Modifier.padding(vertical = 2.dp)
+                            )
+                        }
+                    }
+                }
+
+                Text(
+                    text = "Items are being moved to the internal Trash Can for safety.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(bottom = 24.dp)
+                )
+
+                Button(
+                    onClick = onCancel,
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Text("Cancel Operation")
+                }
+            }
+        }
     }
 }
 
@@ -762,37 +772,6 @@ fun TrashScreen(
 }
 
 @Composable
-fun ReviewItemsDialog(
-    items: List<MediaItem>,
-    selectedUris: Set<Uri>,
-    onSelectedUrisChange: (Set<Uri>) -> Unit,
-    onConfirm: () -> Unit,
-    onDismiss: () -> Unit
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Review Items") },
-        text = {
-            Column {
-                Text("Select items to KEEP (remove from cleanup).")
-                LazyVerticalGrid(columns = GridCells.Adaptive(100.dp), modifier = Modifier.height(300.dp)) {
-                    items(items, key = { it.uri.toString() }) { item ->
-                        Box(Modifier.padding(2.dp).clickable { 
-                            onSelectedUrisChange(if (selectedUris.contains(item.uri)) selectedUris - item.uri else selectedUris + item.uri)
-                        }) {
-                            AsyncImage(model = item.uri, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.aspectRatio(1f))
-                            Checkbox(checked = selectedUris.contains(item.uri), onCheckedChange = null, modifier = Modifier.align(Alignment.TopEnd))
-                        }
-                    }
-                }
-            }
-        },
-        confirmButton = { Button(onClick = onConfirm) { Text("Trash Selected (${selectedUris.size})") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
-    )
-}
-
-@Composable
 fun ConfirmDeletionDialog(
     deleteAction: DeleteAction?,
     deleteAttachmentsOnly: Boolean,
@@ -899,7 +878,10 @@ private suspend fun loadMmsMedia(contentResolver: ContentResolver): List<MediaIt
             val partId = cursor.getLong(idCol)
             val msgId = cursor.getLong(msgIdCol)
             val date = messageDates[msgId] ?: 0L
-            val size = if (dataCol != -1) File(cursor.getString(dataCol) ?: "").length() else 0L
+            val size = if (dataCol != -1) {
+                val path = cursor.getString(dataCol)
+                if (path != null) File(path).length() else 0L
+            } else 0L
             val uri = Telephony.Mms.CONTENT_URI.buildUpon().appendPath("part").appendPath(partId.toString()).build()
             mediaItems.add(MediaItem(uri, date, cursor.getString(typeCol), size))
         }
