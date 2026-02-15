@@ -3,14 +3,17 @@ package com.ubermicrostudios.textimagecleaner
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.net.Uri
-import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
 import android.provider.Telephony
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.net.toUri
 import androidx.work.CoroutineWorker
 import androidx.work.ForegroundInfo
 import androidx.work.WorkerParameters
@@ -24,8 +27,10 @@ import java.io.FileOutputStream
 import java.util.UUID
 
 /**
- * Background worker responsible for the heavy lifting of moving media from system MMS storage
- * to the app's internal trash folder and then deleting it from the system.
+ * Background worker responsible for the heavy lifting of processing media from system MMS storage.
+ * It handles moving items to the internal trash, permanent deletion of attachments, and 
+ * optional backups to public gallery storage.
+ * Optimized for Android 15+ (API 35+) environment.
  */
 class DeletionWorker(appContext: Context, params: WorkerParameters) :
     CoroutineWorker(appContext, params) {
@@ -46,6 +51,7 @@ class DeletionWorker(appContext: Context, params: WorkerParameters) :
         const val KEY_URIS_FILE_PATH = "uris_file_path"
         const val KEY_DELETE_ATTACHMENTS_ONLY = "delete_attachments_only"
         const val KEY_DELETE_EMPTY_MESSAGES = "delete_empty_messages"
+        const val KEY_BACKUP_BEFORE_DELETE = "backup_before_delete"
         
         // Progress Keys
         const val KEY_TOTAL_COUNT = "total_count"
@@ -56,11 +62,12 @@ class DeletionWorker(appContext: Context, params: WorkerParameters) :
     override suspend fun doWork(): Result {
         val deleteEmpty = inputData.getBoolean(KEY_DELETE_EMPTY_MESSAGES, false)
         val deleteAttachmentsOnly = inputData.getBoolean(KEY_DELETE_ATTACHMENTS_ONLY, false)
+        val backupBeforeDelete = inputData.getBoolean(KEY_BACKUP_BEFORE_DELETE, false)
         val filePath = inputData.getString(KEY_URIS_FILE_PATH)
 
         createNotificationChannels()
         // Initialize foreground notification for background execution
-        setForeground(createForegroundInfo(0, 0, true))
+        setForeground(createForegroundInfo(0, 0, true, deleteAttachmentsOnly))
 
         var totalVerifiedDeleted = 0
 
@@ -69,45 +76,54 @@ class DeletionWorker(appContext: Context, params: WorkerParameters) :
                 if (deleteEmpty) {
                     // Scenario 1: Just cleaning up empty message threads
                     val count = deleteEmptyMessages()
-                    showCompletionNotification(count)
+                    showCompletionNotification(count, false)
                 } else if (filePath != null) {
-                    // Scenario 2: Trashing specific media items
+                    // Scenario 2: Processing specific media items (Trash or Permanent Delete)
                     val file = File(filePath)
                     if (file.exists()) {
-                        val uris = file.readLines().map { Uri.parse(it) }
+                        val uris = file.readLines().map { it.toUri() }
                         val total = uris.size
-                        setForeground(createForegroundInfo(total, 0, false))
+                        setForeground(createForegroundInfo(total, 0, false, deleteAttachmentsOnly))
 
                         uris.forEachIndexed { index, uri ->
                             if (isStopped) return@forEachIndexed
                             
                             val itemInfo = getItemInfo(uri)
-                            // First, move the file to internal storage and record in DB
-                            val trashed = trashItem(uri)
-                            if (trashed) {
-                                // Only delete from system if the trashing was successful
-                                val success = if (deleteAttachmentsOnly) {
-                                    deleteAttachmentSingle(uri)
-                                } else {
-                                    deleteMessageForPart(uri)
-                                }
-                                if (success) totalVerifiedDeleted++
+                            
+                            // Optional: Export a copy to the user's Pictures/Movies folder before removal
+                            if (backupBeforeDelete) {
+                                backupItem(uri)
                             }
 
-                            // Update progress periodically
-                            if (index % 5 == 0 || index == total - 1) {
-                                setForeground(createForegroundInfo(total, index + 1, false))
+                            val success = if (deleteAttachmentsOnly) {
+                                // MODE: Permanent Delete (Bypasses Trash Can)
+                                deleteAttachmentSingle(uri)
+                            } else {
+                                // MODE: Move to Trash (Safety First)
+                                val trashed = trashItem(uri)
+                                if (trashed) {
+                                    deleteMessageForPart(uri)
+                                } else {
+                                    false
+                                }
+                            }
+                            
+                            if (success) totalVerifiedDeleted++
+
+                            // Update UI and notification progress periodically
+                            if ((index % 5 == 0) || (index == total - 1)) {
+                                setForeground(createForegroundInfo(total, index + 1, false, deleteAttachmentsOnly))
                                 setProgress(workDataOf(
                                     KEY_TOTAL_COUNT to total, 
                                     KEY_DELETED_COUNT to totalVerifiedDeleted,
-                                    KEY_LAST_ITEM_INFO to itemInfo
+                                    KEY_LAST_ITEM_INFO to itemInfo,
                                 ))
                             }
                         }
                         file.delete()
                     }
                 }
-                showCompletionNotification(totalVerifiedDeleted) 
+                showCompletionNotification(totalVerifiedDeleted, deleteAttachmentsOnly) 
                 Result.success()
             } catch (e: Exception) {
                 Log.e("DeletionWorker", "Error during cleanup", e)
@@ -129,7 +145,7 @@ class DeletionWorker(appContext: Context, params: WorkerParameters) :
 
     /**
      * Copies a media file from the system MMS provider to internal storage
-     * and creates a record in the TrashedItem database.
+     * and creates a record in the TrashedItem database, capturing associated text.
      */
     private suspend fun trashItem(uri: Uri): Boolean {
         return try {
@@ -140,8 +156,9 @@ class DeletionWorker(appContext: Context, params: WorkerParameters) :
             var mimeType = "image/jpeg"
             val date = System.currentTimeMillis()
             var size = 0L
+            var msgId: Long = -1
 
-            // Get metadata from system provider
+            // 1. Get metadata (MIME type and parent Message ID)
             contentResolver.query(uri, null, null, null, null)?.use { cursor ->
                 if (cursor.moveToFirst()) {
                     val ctCol = cursor.getColumnIndex(Telephony.Mms.Part.CONTENT_TYPE)
@@ -149,10 +166,17 @@ class DeletionWorker(appContext: Context, params: WorkerParameters) :
                         val type = cursor.getString(ctCol)
                         if (type != null) mimeType = type
                     }
+                    val msgIdCol = cursor.getColumnIndex(Telephony.Mms.Part.MSG_ID)
+                    if (msgIdCol != -1) {
+                        msgId = cursor.getLong(msgIdCol)
+                    }
                 }
             }
+            
+            // 2. Fetch associated text message body to preserve context in trash
+            val bodyText = if (msgId != -1L) MediaUtils.getMmsText(contentResolver, msgId) else null
 
-            // Perform the physical copy
+            // 3. Perform the physical copy to internal storage
             contentResolver.openInputStream(uri)?.use { input ->
                 FileOutputStream(trashedFile).use { output ->
                     val buffer = ByteArray(8192)
@@ -165,14 +189,15 @@ class DeletionWorker(appContext: Context, params: WorkerParameters) :
             }
 
             if (size > 0) {
-                // Save metadata to Room
+                // 4. Save metadata to Room for UI retrieval
                 val item = TrashedItem(
                     uriString = uri.toString(),
                     fileName = trashedFile.name,
                     mimeType = mimeType,
                     originalDate = date,
                     trashedDate = System.currentTimeMillis(),
-                    fileSize = size
+                    fileSize = size,
+                    messageBody = bodyText
                 )
                 trashDao.insert(item)
                 true
@@ -186,7 +211,65 @@ class DeletionWorker(appContext: Context, params: WorkerParameters) :
         }
     }
 
-    /** Deletes just the media attachment, leaving the text message shell. */
+    /**
+     * Copies a media file from the system MMS provider to the public gallery
+     * as a backup. Uses MediaStore API for Scoped Storage compliance.
+     */
+    private suspend fun backupItem(uri: Uri): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val contentResolver = applicationContext.contentResolver
+            var mimeType = "image/jpeg"
+            var displayName = "backup_${uri.lastPathSegment}"
+
+            // Extract metadata for the backup record
+            contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val ctCol = cursor.getColumnIndex(Telephony.Mms.Part.CONTENT_TYPE)
+                    if (ctCol != -1) {
+                        val type = cursor.getString(ctCol)
+                        if (type != null) mimeType = type
+                    }
+                    val nameCol = cursor.getColumnIndex(Telephony.Mms.Part.NAME)
+                    if (nameCol != -1) {
+                        val name = cursor.getString(nameCol)
+                        if (!name.isNullOrBlank()) displayName = "backup_$name"
+                    }
+                }
+            }
+
+            // Define target location and properties in Scoped Storage
+            val values = ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, displayName)
+                put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
+                put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/TextImageCleaner_Backup")
+                put(MediaStore.MediaColumns.IS_PENDING, 1) // Atomicity for Scoped Storage
+            }
+
+            val collection = if (mimeType.startsWith("video/")) {
+                MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+            } else {
+                MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+            }
+
+            val destUri = contentResolver.insert(collection, values)
+            destUri?.let { targetUri ->
+                contentResolver.openOutputStream(targetUri)?.use { output ->
+                    contentResolver.openInputStream(uri)?.use { input ->
+                        input.copyTo(output)
+                    }
+                }
+                values.clear()
+                values.put(MediaStore.MediaColumns.IS_PENDING, 0)
+                contentResolver.update(targetUri, values, null, null)
+                true
+            } ?: false
+        } catch (e: Exception) {
+            Log.e("DeletionWorker", "Failed to backup item: $uri", e)
+            false
+        }
+    }
+
+    /** Deletes just the media attachment part, leaving the text message shell intact. */
     private fun deleteAttachmentSingle(uri: Uri): Boolean {
         return try {
             applicationContext.contentResolver.delete(uri, null, null) > 0
@@ -200,9 +283,9 @@ class DeletionWorker(appContext: Context, params: WorkerParameters) :
         return try {
             val partId = uri.lastPathSegment ?: return false
             var msgId: Long? = null
-            val contentUri = Uri.parse("content://mms/part")
+            val contentUri = "content://mms/part".toUri()
             
-            // Find the parent message ID
+            // Find the parent message ID for this media part
             applicationContext.contentResolver.query(
                 contentUri,
                 arrayOf(Telephony.Mms.Part.MSG_ID),
@@ -215,7 +298,7 @@ class DeletionWorker(appContext: Context, params: WorkerParameters) :
                 }
             }
 
-            // Delete the message
+            // Perform the full message deletion
             msgId?.let {
                 applicationContext.contentResolver.delete(
                     Telephony.Mms.CONTENT_URI,
@@ -228,10 +311,11 @@ class DeletionWorker(appContext: Context, params: WorkerParameters) :
         }
     }
 
-    /** Creates the foreground info required to keep the worker running. */
-    private fun createForegroundInfo(total: Int, progress: Int, indeterminate: Boolean): ForegroundInfo {
-        val title = "Trashing Media"
-        val content = if (indeterminate) "Preparing..." else "Moving to Trash... ($progress / $total)"
+    /** Creates the foreground info required to keep the worker running across app restarts. */
+    private fun createForegroundInfo(total: Int, progress: Int, indeterminate: Boolean, isDeleteOnly: Boolean): ForegroundInfo {
+        val title = if (isDeleteOnly) "Deleting Attachments" else "Trashing Media"
+        val actionVerb = if (isDeleteOnly) "Deleting" else "Moving to Trash"
+        val content = if (indeterminate) "Preparing..." else "$actionVerb... ($progress / $total)"
 
         val intent = Intent(applicationContext, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
@@ -251,15 +335,11 @@ class DeletionWorker(appContext: Context, params: WorkerParameters) :
             .setContentIntent(pendingIntent)
             .build()
 
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-             ForegroundInfo(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
-        } else {
-            ForegroundInfo(NOTIFICATION_ID, notification)
-        }
+        return ForegroundInfo(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
     }
 
-    /** Shows a final notification when the operation completes. */
-    private fun showCompletionNotification(deletedCount: Int) {
+    /** Shows a final system notification when the operation completes. */
+    private fun showCompletionNotification(deletedCount: Int, isDeleteOnly: Boolean) {
         val intent = Intent(applicationContext, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
         }
@@ -267,7 +347,11 @@ class DeletionWorker(appContext: Context, params: WorkerParameters) :
             applicationContext, 0, intent, PendingIntent.FLAG_IMMUTABLE
         )
 
-        val contentText = "Moved $deletedCount items to Trash."
+        val contentText = if (isDeleteOnly) {
+            "Permanently deleted $deletedCount attachments."
+        } else {
+            "Moved $deletedCount items to Trash."
+        }
 
         val notification = NotificationCompat.Builder(applicationContext, COMPLETION_CHANNEL_ID)
             .setContentTitle("Cleanup Complete")
@@ -282,25 +366,23 @@ class DeletionWorker(appContext: Context, params: WorkerParameters) :
         notificationManager.notify(COMPLETION_NOTIFICATION_ID, notification)
     }
 
-    /** Initializes notification channels for O+ devices. */
+    /** Initializes high and low importance notification channels. */
     private fun createNotificationChannels() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val progressChannel = NotificationChannel(
-                CHANNEL_ID,
-                "Deletion Progress",
-                NotificationManager.IMPORTANCE_LOW
-            )
-            
-            val completionChannel = NotificationChannel(
-                COMPLETION_CHANNEL_ID,
-                "Deletion Completion",
-                NotificationManager.IMPORTANCE_DEFAULT
-            ).apply {
-                description = "Notifies when message deletion is complete"
-            }
-            
-            notificationManager.createNotificationChannels(listOf(progressChannel, completionChannel))
+        val progressChannel = NotificationChannel(
+            CHANNEL_ID,
+            "Deletion Progress",
+            NotificationManager.IMPORTANCE_LOW
+        )
+        
+        val completionChannel = NotificationChannel(
+            COMPLETION_CHANNEL_ID,
+            "Deletion Completion",
+            NotificationManager.IMPORTANCE_DEFAULT
+        ).apply {
+            description = "Notifies when message deletion is complete"
         }
+        
+        notificationManager.createNotificationChannels(listOf(progressChannel, completionChannel))
     }
 
     /** Deletes SMS message records that have no body text. */

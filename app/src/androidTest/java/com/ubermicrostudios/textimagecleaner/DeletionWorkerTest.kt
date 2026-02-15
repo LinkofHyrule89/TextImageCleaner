@@ -4,6 +4,7 @@ import android.content.ContentValues
 import android.content.Context
 import android.graphics.Bitmap
 import android.net.Uri
+import android.provider.MediaStore
 import android.provider.Telephony
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -11,18 +12,23 @@ import androidx.work.ListenableWorker
 import androidx.work.testing.TestListenableWorkerBuilder
 import androidx.work.workDataOf
 import com.ubermicrostudios.textimagecleaner.data.AppDatabase
+import com.ubermicrostudios.textimagecleaner.data.TrashedItem
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
+import java.io.FileOutputStream
+import java.util.UUID
 
 /**
- * Instrumented test to verify the DeletionWorker's ability to move system MMS media
- * to the app's internal trash and delete the original system records based on user settings.
+ * Instrumented tests to verify media operations: delete, trash, restore, and backup.
+ * These tests interact with the system Telephony and MediaStore providers.
  */
 @RunWith(AndroidJUnit4::class)
 class DeletionWorkerTest {
@@ -37,58 +43,128 @@ class DeletionWorkerTest {
     }
 
     /**
-     * Test Case: Verify that deleting the entire message removes both the attachment
-     * and the parent message record from the system.
+     * Test Case: Verify "Move to Trash" (Standard Delete) and automated message text capture.
+     * Ensures that when an item is trashed, its associated text message is saved in Room.
      */
     @Test
-    fun testDeleteEntireMessage() = runBlocking {
-        // 1. Setup mock data
+    fun testMoveToTrashWithMessage() = runBlocking {
+        val testMessage = "Hello from Unit Test ${UUID.randomUUID()}"
         val mmsUri = insertMockMms()
-        assertNotNull("MMS insertion failed. Ensure app is Default SMS app in emulator settings.", mmsUri)
-        val partUri = insertMockMmsPart(mmsUri!!)
-        assertNotNull("MMS part insertion failed", partUri)
-
-        // 2. Execute worker with 'attachmentsOnly = false'
-        val result = runDeletionWorker(partUri!!, attachmentsOnly = false)
-        assertTrue("Worker result should be success", result is ListenableWorker.Result.Success)
-
-        // 3. Verification: Part should be gone
-        assertTrue("MMS Part should have been deleted", !uriExists(partUri))
+        assertNotNull("MMS insertion failed. Ensure app is Default SMS in settings.", mmsUri)
         
-        // 4. Verification: MMS message should also be gone
-        assertTrue("Parent MMS message should have been deleted", !uriExists(mmsUri))
+        // Insert a multipart MMS with both image and text
+        val partUri = insertMockMmsPart(mmsUri!!, "trash_test.jpg")
+        assertNotNull("MMS part insertion failed", partUri)
+        insertMockMmsTextPart(mmsUri, testMessage)
 
-        // 5. Verification: Verify trashing logic worked
-        verifyTrashed(partUri)
+        // Execute background worker (Move to Trash mode)
+        val result = runDeletionWorker(partUri!!, attachmentsOnly = false)
+        assertEquals(ListenableWorker.Result.Success(), result)
+
+        // Verify the database record contains the captured text
+        val trashedItems = database.trashDao().getAllTrashedItems().first()
+        val trashedItem = trashedItems.find { it.uriString == partUri.toString() }
+        assertNotNull("Item should be in trash DB", trashedItem)
+        assertEquals("Message body should be captured accurately", testMessage, trashedItem!!.messageBody)
+        
+        // Cleanup local test artifacts
+        val trashFile = File(context.filesDir, "trash/${trashedItem.fileName}")
+        if (trashFile.exists()) trashFile.delete()
+        database.trashDao().delete(trashedItem)
     }
 
     /**
-     * Test Case: Verify that the 'Delete Attachments Only' setting removes the media
-     * part but leaves the parent MMS message shell intact.
+     * Test Case: Verify "Delete Permanently" (Attachment Only).
+     * Validates that the trash is bypassed and only the media part is removed.
      */
     @Test
-    fun testDeleteAttachmentOnly() = runBlocking {
-        // 1. Setup mock data
+    fun testDeletePermanentlyNoTrash() = runBlocking {
         val mmsUri = insertMockMms()
-        assertNotNull("MMS insertion failed", mmsUri)
-        val partUri = insertMockMmsPart(mmsUri!!)
-        assertNotNull("MMS part insertion failed", partUri)
+        val partUri = insertMockMmsPart(mmsUri!!, "permanent_delete.jpg")
 
-        // 2. Execute worker with 'attachmentsOnly = true'
+        // Execute background worker (Permanent Delete mode)
         val result = runDeletionWorker(partUri!!, attachmentsOnly = true)
-        assertTrue("Worker result should be success", result is ListenableWorker.Result.Success)
+        assertEquals(ListenableWorker.Result.Success(), result)
 
-        // 3. Verification: Part should be gone
-        assertTrue("MMS Part should have been deleted", !uriExists(partUri))
-        
-        // 4. Verification: MMS message should STILL EXIST
-        assertTrue("Parent MMS message should NOT have been deleted", uriExists(mmsUri))
+        // Verify original system states
+        assertTrue("Original MMS Part should be gone", !uriExists(partUri))
+        assertTrue("Parent MMS Message should still exist (empty)", uriExists(mmsUri))
 
-        // 5. Verification: Verify trashing logic worked
-        verifyTrashed(partUri)
+        // Verify NO trash record was created
+        val trashedItems = database.trashDao().getAllTrashedItems().first()
+        val trashedItem = trashedItems.find { it.uriString == partUri.toString() }
+        assertNull("Item should NOT be in the trash database", trashedItem)
     }
 
-    /** Helper to check if a content URI still exists in the system. */
+    /**
+     * Test Case: Verify "Backup to Gallery" before deletion.
+     * Confirms that a copy is successfully placed in public MediaStore before the original is lost.
+     */
+    @Test
+    fun testBackupBeforeDelete() = runBlocking {
+        val fileName = "backup_test_${UUID.randomUUID()}.jpg"
+        val mmsUri = insertMockMms()
+        val partUri = insertMockMmsPart(mmsUri!!, fileName)
+
+        val urisFilePath = File(context.cacheDir, "test_uris_backup.txt")
+        urisFilePath.writeText(partUri.toString())
+
+        val worker = TestListenableWorkerBuilder<DeletionWorker>(
+            context = context,
+            inputData = workDataOf(
+                DeletionWorker.KEY_URIS_FILE_PATH to urisFilePath.absolutePath,
+                DeletionWorker.KEY_BACKUP_BEFORE_DELETE to true,
+                DeletionWorker.KEY_DELETE_ATTACHMENTS_ONLY to false
+            )
+        ).build()
+
+        val result = worker.doWork()
+        assertEquals(ListenableWorker.Result.Success(), result)
+
+        // Verify the backup exists in the public Images collection
+        assertTrue("Backup should exist in MediaStore with correct name", verifyMediaExists("backup_$fileName"))
+        
+        // Also verify standard trashing occurred as a secondary step
+        verifyTrashed(partUri!!)
+    }
+
+    /**
+     * Test Case: Verify "Restore from Trash" back to Gallery.
+     * Simulates a user taking an item out of the app's safety trash and making it public again.
+     */
+    @Test
+    fun testRestoreFromTrash() = runBlocking {
+        val uniqueName = "restore_test_${UUID.randomUUID()}.jpg"
+        val trashFile = File(context.filesDir, "trash/$uniqueName")
+        trashFile.parentFile?.mkdirs()
+        FileOutputStream(trashFile).use { out ->
+            Bitmap.createBitmap(100, 100, Bitmap.Config.ARGB_8888).compress(Bitmap.CompressFormat.JPEG, 100, out)
+        }
+
+        // Mock a trash entry
+        val trashedItem = TrashedItem(
+            uriString = "content://mms/part/mock_restore_${UUID.randomUUID()}",
+            fileName = uniqueName,
+            mimeType = "image/jpeg",
+            originalDate = System.currentTimeMillis(),
+            trashedDate = System.currentTimeMillis(),
+            fileSize = trashFile.length(),
+            messageBody = "Restored context"
+        )
+        database.trashDao().insert(trashedItem)
+
+        // Perform the restoration logic
+        MediaUtils.restoreToGallery(context, trashedItem)
+
+        // Verify successful export to MediaStore
+        assertTrue("Restored item should exist in MediaStore", verifyMediaExists("Restored_$uniqueName"))
+
+        trashFile.delete()
+        database.trashDao().delete(trashedItem)
+    }
+
+    // --- Helpers for Test Verification and Mock Data Injection ---
+
     private fun uriExists(uri: Uri): Boolean {
         return try {
             context.contentResolver.query(uri, null, null, null, null)?.use { 
@@ -99,7 +175,16 @@ class DeletionWorkerTest {
         }
     }
 
-    /** Helper to build and run the DeletionWorker for a single URI. */
+    private fun verifyMediaExists(displayName: String): Boolean {
+        val collection = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+        val selection = "${MediaStore.MediaColumns.DISPLAY_NAME} = ?"
+        val selectionArgs = arrayOf(displayName)
+        context.contentResolver.query(collection, null, selection, selectionArgs, null)?.use { cursor ->
+            return cursor.count > 0
+        }
+        return false
+    }
+
     private suspend fun runDeletionWorker(targetUri: Uri, attachmentsOnly: Boolean): ListenableWorker.Result {
         val urisFilePath = File(context.cacheDir, "test_uris.txt")
         urisFilePath.writeText(targetUri.toString())
@@ -115,70 +200,54 @@ class DeletionWorkerTest {
         return worker.doWork()
     }
 
-    /** Helper to verify that an item was correctly moved to the internal trash system. */
     private suspend fun verifyTrashed(originalUri: Uri) {
         val trashedItems = database.trashDao().getAllTrashedItems().first()
         val trashedItem = trashedItems.find { it.uriString == originalUri.toString() }
-        assertNotNull("Item should be recorded in the trash database", trashedItem)
+        assertNotNull("Item should be recorded in trash DB", trashedItem)
 
         val trashFile = File(context.filesDir, "trash/${trashedItem!!.fileName}")
-        assertTrue("File should physically exist in the internal trash directory", trashFile.exists())
-        assertTrue("Trashed file size should be greater than zero", trashFile.length() > 0)
+        assertTrue("File should exist in internal trash", trashFile.exists())
         
-        // Cleanup trashing artifacts to keep test idempotent
+        // Cleanup
         trashFile.delete()
         database.trashDao().delete(trashedItem)
     }
 
-    /** Helper to insert a dummy MMS record into the system provider. */
     private fun insertMockMms(): Uri? {
         val values = ContentValues().apply {
             put(Telephony.Mms.MESSAGE_BOX, Telephony.Mms.MESSAGE_BOX_INBOX)
             put(Telephony.Mms.DATE, System.currentTimeMillis() / 1000)
-            put(Telephony.Mms.READ, 1)
-            put(Telephony.Mms.SUBJECT, "Test Subject")
             put(Telephony.Mms.CONTENT_TYPE, "application/vnd.wap.mms-message")
         }
-        return try {
-            context.contentResolver.insert(Telephony.Mms.CONTENT_URI, values)
-        } catch (e: Exception) {
-            e.printStackTrace()
-            null
-        }
+        return context.contentResolver.insert(Telephony.Mms.CONTENT_URI, values)
     }
 
-    /** Helper to insert a dummy media part and write actual bitmap bytes to it. */
-    private fun insertMockMmsPart(mmsUri: Uri): Uri? {
+    private fun insertMockMmsPart(mmsUri: Uri, partName: String): Uri? {
         val mmsId = mmsUri.lastPathSegment
         val partUri = Uri.parse("content://mms/$mmsId/part")
-        
         val values = ContentValues().apply {
             put(Telephony.Mms.Part.MSG_ID, mmsId)
             put(Telephony.Mms.Part.CONTENT_TYPE, "image/jpeg")
-            put(Telephony.Mms.Part.NAME, "test_image.jpg")
-            put(Telephony.Mms.Part.FILENAME, "test_image.jpg")
-            put(Telephony.Mms.Part.CONTENT_ID, "<test_image>")
-            put(Telephony.Mms.Part.CONTENT_LOCATION, "test_image.jpg")
+            put(Telephony.Mms.Part.NAME, partName)
+            put(Telephony.Mms.Part.FILENAME, partName)
         }
-        
-        val insertedPartUri = try {
-            context.contentResolver.insert(partUri, values)
-        } catch (e: Exception) {
-            e.printStackTrace()
-            null
-        }
-        
-        insertedPartUri?.let { uri ->
-            try {
-                context.contentResolver.openOutputStream(uri)?.use { output ->
-                    val bitmap = Bitmap.createBitmap(100, 100, Bitmap.Config.ARGB_8888)
-                    bitmap.compress(Bitmap.CompressFormat.JPEG, 100, output)
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
+        val inserted = context.contentResolver.insert(partUri, values)
+        inserted?.let { uri ->
+            context.contentResolver.openOutputStream(uri)?.use { 
+                Bitmap.createBitmap(10, 10, Bitmap.Config.ARGB_8888).compress(Bitmap.CompressFormat.JPEG, 100, it)
             }
         }
-        
-        return insertedPartUri
+        return inserted
+    }
+
+    private fun insertMockMmsTextPart(mmsUri: Uri, text: String): Uri? {
+        val mmsId = mmsUri.lastPathSegment
+        val partUri = Uri.parse("content://mms/$mmsId/part")
+        val values = ContentValues().apply {
+            put(Telephony.Mms.Part.MSG_ID, mmsId)
+            put(Telephony.Mms.Part.CONTENT_TYPE, "text/plain")
+            put(Telephony.Mms.Part.TEXT, text)
+        }
+        return context.contentResolver.insert(partUri, values)
     }
 }

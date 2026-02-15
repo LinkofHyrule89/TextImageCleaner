@@ -1,17 +1,11 @@
 package com.ubermicrostudios.textimagecleaner
 
 import android.app.role.RoleManager
-import android.content.ContentResolver
-import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
-import android.os.Build
 import android.os.Bundle
-import android.os.Environment
-import android.provider.MediaStore
 import android.provider.Telephony
-import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -63,8 +57,6 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
-import androidx.compose.material3.DatePickerDialog
-import androidx.compose.material3.DateRangePicker
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -78,11 +70,11 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.rememberDateRangePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -99,7 +91,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.core.view.WindowCompat
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
@@ -113,11 +104,8 @@ import com.google.accompanist.permissions.rememberMultiplePermissionsState
 import com.ubermicrostudios.textimagecleaner.data.AppDatabase
 import com.ubermicrostudios.textimagecleaner.data.TrashedItem
 import com.ubermicrostudios.textimagecleaner.ui.theme.TextImageCleanerTheme
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import java.io.File
-import java.io.FileInputStream
 import java.time.Instant
 import java.time.LocalDateTime
 import java.time.YearMonth
@@ -127,12 +115,18 @@ import java.util.Locale
 import java.util.UUID
 
 /** UI model for a single media item found in MMS. */
-data class MediaItem(val uri: Uri, val date: Long, val mimeType: String, val size: Long = 0)
+data class MediaItem(
+    val uri: Uri, 
+    val date: Long, 
+    val mimeType: String, 
+    val size: Long = 0, 
+    val messageBody: String? = null,
+)
 
 /** Groups media items by month for the UI grid. */
 data class GroupedMediaItems(val groupTitle: String, val items: List<MediaItem>, val uris: Set<Uri>)
 
-/** Sealed class representing different types of deletion operations. */
+/** Sealed class representing different types of cleanup operations. */
 sealed class DeleteAction {
     data class BySelection(val uris: Set<Uri>) : DeleteAction()
     object EmptyMessages : DeleteAction()
@@ -151,7 +145,7 @@ class MainActivity : ComponentActivity() {
 
     // Result launcher for the 'Set as Default SMS' system dialog.
     private val roleRequestLauncher = registerForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
+        ActivityResultContracts.StartActivityForResult(),
     ) { 
         isDefault = isDefaultSmsApp()
         if (isDefault) {
@@ -175,7 +169,7 @@ class MainActivity : ComponentActivity() {
                     SmsAppScreen(
                         onRequestDefaultSms = { requestDefaultSmsRole() },
                         onRequestSystemDefaultSms = { openDefaultSmsSettings() },
-                        isDefault = isDefault
+                        isDefault = isDefault,
                     )
                 }
             }
@@ -190,28 +184,21 @@ class MainActivity : ComponentActivity() {
 
     /** Checks if this app is the current default SMS provider. */
     private fun isDefaultSmsApp(): Boolean {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            val roleManager = getSystemService(RoleManager::class.java)
-            roleManager.isRoleHeld(RoleManager.ROLE_SMS)
-        } else {
-            Telephony.Sms.getDefaultSmsPackage(this) == packageName
-        }
+        // Assume API 35+ (Android 15+)
+        val roleManager = getSystemService(RoleManager::class.java)
+        return roleManager?.isRoleHeld(RoleManager.ROLE_SMS) ?: false
     }
 
     /** Launches the system request to become the default SMS app. */
     private fun requestDefaultSmsRole() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            val roleManager = getSystemService(RoleManager::class.java)
-            if (roleManager.isRoleAvailable(RoleManager.ROLE_SMS) &&
-                !roleManager.isRoleHeld(RoleManager.ROLE_SMS)
-            ) {
-                val intent = roleManager.createRequestRoleIntent(RoleManager.ROLE_SMS)
-                roleRequestLauncher.launch(intent)
-            }
-        } else {
-            val intent = Intent(Telephony.Sms.Intents.ACTION_CHANGE_DEFAULT)
-            intent.putExtra(Telephony.Sms.Intents.EXTRA_PACKAGE_NAME, packageName)
-            startActivity(intent)
+        // Assume API 35+ (Android 15+)
+        val roleManager = getSystemService(RoleManager::class.java)
+        if (roleManager != null && 
+            roleManager.isRoleAvailable(RoleManager.ROLE_SMS) &&
+            !roleManager.isRoleHeld(RoleManager.ROLE_SMS)
+        ) {
+            val intent = roleManager.createRequestRoleIntent(RoleManager.ROLE_SMS)
+            roleRequestLauncher.launch(intent)
         }
     }
 
@@ -226,13 +213,13 @@ class MainActivity : ComponentActivity() {
 @OptIn(
     ExperimentalPermissionsApi::class,
     androidx.compose.foundation.ExperimentalFoundationApi::class,
-    ExperimentalMaterial3Api::class
+    ExperimentalMaterial3Api::class,
 )
 @Composable
 fun SmsAppScreen(
     onRequestDefaultSms: () -> Unit,
     onRequestSystemDefaultSms: () -> Unit,
-    isDefault: Boolean
+    isDefault: Boolean,
 ) {
     val context = LocalContext.current
     val contentResolver = context.contentResolver
@@ -245,18 +232,24 @@ fun SmsAppScreen(
     val trashedItems by trashDao.getAllTrashedItems().collectAsState(initial = emptyList())
     val totalTrashedSize by trashDao.getTotalTrashedSize().collectAsState(initial = 0L)
 
-    // SMS Permissions state
-    val smsPermissionsState = rememberMultiplePermissionsState(
+    // Modern Permissions logic (Android 15, 16, 17 Beta Ready)
+    // - READ_SMS is required even for Default SMS apps when targeting higher SDKs 
+    //   to perform direct ContentResolver queries on MmsProvider.
+    val permissionsToRequest = remember {
         listOf(
             android.Manifest.permission.READ_SMS,
-            android.Manifest.permission.POST_NOTIFICATIONS
+            android.Manifest.permission.POST_NOTIFICATIONS,
+            android.Manifest.permission.READ_MEDIA_IMAGES,
+            android.Manifest.permission.READ_MEDIA_VIDEO,
+            android.Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED,
         )
-    )
+    }
+
+    val permissionsState = rememberMultiplePermissionsState(permissionsToRequest)
 
     // UI State
     var currentTab by remember { mutableStateOf(AppTab.CLEANER) }
     var mediaList by remember { mutableStateOf<List<MediaItem>>(emptyList()) }
-    var isRefreshing by remember { mutableStateOf(false) }
     var mediaTypeFilter by remember { mutableStateOf(MediaTypeFilter.ALL) }
 
     // Logic to filter the media list based on user selection
@@ -270,13 +263,14 @@ fun SmsAppScreen(
 
     // Logic to group media by month for the grid headers
     val groupedMedia = remember(filteredMediaList) {
-        filteredMediaList.groupBy {
-            val date = LocalDateTime.ofInstant(Instant.ofEpochMilli(it.date), ZoneId.systemDefault())
-            YearMonth.from(date)
-        }.toSortedMap(Comparator.reverseOrder())
+        filteredMediaList.asSequence()
+            .groupBy {
+                val date = LocalDateTime.ofInstant(Instant.ofEpochMilli(it.date), ZoneId.systemDefault())
+                YearMonth.from(date)
+            }.toSortedMap(Comparator.reverseOrder())
             .map { (yearMonth, items) ->
                 val title = yearMonth.format(DateTimeFormatter.ofPattern("MMMM yyyy", Locale.getDefault()))
-                GroupedMediaItems(title, items, items.map { it.uri }.toSet())
+                GroupedMediaItems(title, items, items.asSequence().map { it.uri }.toSet())
             }
     }
 
@@ -284,8 +278,10 @@ fun SmsAppScreen(
     var showConfirmDeleteDialog by remember { mutableStateOf(false) }
     var deleteAction by remember { mutableStateOf<DeleteAction?>(null) }
     var selectionMode by remember { mutableStateOf(false) }
-    var selectedItems by remember { mutableStateOf<Set<Uri>>(emptySet()) }
+    var selectedItems by remember { mutableStateOf(value = emptySet<Uri>()) }
     var deleteAttachmentsOnly by remember { mutableStateOf(false) }
+    var backupBeforeDelete by remember { mutableStateOf(false) }
+    var showMessageOption by remember { mutableStateOf(false) } // Toggle for viewing text message context
 
     // Background Work State
     var showDeleteProgressScreen by remember { mutableStateOf(false) }
@@ -293,14 +289,14 @@ fun SmsAppScreen(
     var currentWorkId by remember { mutableStateOf<UUID?>(null) }
     val deletionLog = remember { mutableStateListOf<String>() }
 
-    // Observe WorkManager progress
+    // Observe WorkManager progress for the real-time overlay
     val workInfoState = remember(currentWorkId) {
         currentWorkId?.let { workManager.getWorkInfoByIdLiveData(it) }
     }?.observeAsState()
     
     val workInfo = workInfoState?.value
-    var deletedCount by remember { mutableStateOf(0) }
-    var totalToDelete by remember { mutableStateOf(0) }
+    var deletedCount by remember { mutableIntStateOf(0) }
+    var totalToDelete by remember { mutableIntStateOf(0) }
 
     // Specialized ImageLoader for Video Thumbnails
     val imageLoader = remember {
@@ -313,16 +309,15 @@ fun SmsAppScreen(
     /** Refresh media items from system storage. */
     fun updateMedia() {
         coroutineScope.launch {
-            isRefreshing = true
-            mediaList = loadMmsMedia(contentResolver)
-            isRefreshing = false
+            mediaList = MediaUtils.loadMmsMedia(contentResolver)
         }
     }
 
-    // Handle background work updates
+    // Handle background work updates and completion logic
     LaunchedEffect(workInfo) {
-        if (workInfo != null) {
-            val progress = workInfo.progress
+        val currentWorkInfo = workInfo
+        if (currentWorkInfo != null) {
+            val progress = currentWorkInfo.progress
             val total = progress.getInt(DeletionWorker.KEY_TOTAL_COUNT, 0)
             val deleted = progress.getInt(DeletionWorker.KEY_DELETED_COUNT, 0)
             val lastItem = progress.getString(DeletionWorker.KEY_LAST_ITEM_INFO)
@@ -336,39 +331,45 @@ fun SmsAppScreen(
                 deletionLog.add(lastItem)
             }
 
-            if (workInfo.state == WorkInfo.State.RUNNING || workInfo.state == WorkInfo.State.ENQUEUED) {
+            if (currentWorkInfo.state == WorkInfo.State.RUNNING || currentWorkInfo.state == WorkInfo.State.ENQUEUED) {
                 showDeleteProgressScreen = true
             }
 
-            if (workInfo.state.isFinished) {
+            if (currentWorkInfo.state.isFinished) {
                 showDeleteProgressScreen = false
+                
+                // Determine if this was a "delete only" operation from input data
+                val wasDeleteOnly = currentWorkInfo.outputData.getBoolean(DeletionWorker.KEY_DELETE_ATTACHMENTS_ONLY, false)
+                
                 currentWorkId = null
                 deletionLog.clear()
                 
-                if (workInfo.state == WorkInfo.State.CANCELLED) {
+                if (currentWorkInfo.state == WorkInfo.State.CANCELLED) {
                     showCancelledDialog = true
                 } else {
                     updateMedia()
-                    Toast.makeText(context, "Items moved to Trash", Toast.LENGTH_SHORT).show()
+                    val message = if (wasDeleteOnly) "Attachments deleted permanently" else "Items moved to Trash"
+                    Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
                 }
             }
         }
     }
 
     // Auto-refresh when permissions and default role are granted
-    LaunchedEffect(smsPermissionsState.allPermissionsGranted, isDefault) {
-        if (smsPermissionsState.allPermissionsGranted && isDefault) {
+    LaunchedEffect(permissionsState.allPermissionsGranted, isDefault) {
+        if (permissionsState.allPermissionsGranted && isDefault) {
             updateMedia()
         }
     }
 
-    // Full screen overlay for trashing progress
+    // Full screen overlay for trashing/deletion progress
     if (showDeleteProgressScreen) {
         DeletionProgressOverlay(
             totalToDelete = totalToDelete,
             deletedCount = deletedCount,
             deletionLog = deletionLog,
-            onCancel = { currentWorkId?.let { workManager.cancelWorkById(it) } }
+            isDeleteOnly = deleteAttachmentsOnly,
+            onCancel = { currentWorkId?.let { workManager.cancelWorkById(it) } },
         )
         return
     }
@@ -381,6 +382,7 @@ fun SmsAppScreen(
                         Column {
                             Text(if (currentTab == AppTab.CLEANER) "Cleaner" else "Trash Can")
                             if (currentTab == AppTab.CLEANER) {
+                                // Dynamic Subtitle with statistics
                                 val images = mediaList.filter { it.mimeType.startsWith("image/") }
                                 val videos = mediaList.filter { it.mimeType.startsWith("video/") }
                                 val imgSize = images.sumOf { it.size } / (1024 * 1024)
@@ -399,7 +401,7 @@ fun SmsAppScreen(
                         }
                     },
                     actions = {
-                        if (isDefault && smsPermissionsState.allPermissionsGranted) {
+                        if (isDefault && permissionsState.allPermissionsGranted) {
                             if (currentTab == AppTab.CLEANER && !selectionMode) {
                                 // Filtering Buttons
                                 IconButton(onClick = { mediaTypeFilter = MediaTypeFilter.ALL }) {
@@ -434,14 +436,14 @@ fun SmsAppScreen(
                                 }
                             }
                         }
-                    }
+                    },
                 )
 
-                // Selection Action Bar
+                // Selection Action Bar - appears when user selects one or more items
                 AnimatedVisibility(
                     visible = selectionMode && currentTab == AppTab.CLEANER,
                     enter = expandVertically(),
-                    exit = shrinkVertically()
+                    exit = shrinkVertically(),
                 ) {
                     val selectedItemsList = remember(selectedItems, mediaList) {
                         mediaList.filter { it.uri in selectedItems }
@@ -451,19 +453,20 @@ fun SmsAppScreen(
                     Surface(
                         modifier = Modifier.fillMaxWidth(),
                         shadowElevation = 8.dp,
-                        color = MaterialTheme.colorScheme.surfaceVariant
+                        color = MaterialTheme.colorScheme.surfaceVariant,
                     ) {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(horizontal = 8.dp, vertical = 8.dp),
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
+                            horizontalArrangement = Arrangement.SpaceBetween,
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 IconButton(onClick = {
                                     selectionMode = false
                                     selectedItems = emptySet()
+                                    showMessageOption = false
                                 }) {
                                     Icon(Icons.Default.Close, contentDescription = "Cancel Selection")
                                 }
@@ -471,27 +474,66 @@ fun SmsAppScreen(
                                     Text(
                                         "${selectedItems.size} selected",
                                         style = MaterialTheme.typography.titleMedium,
-                                        fontWeight = FontWeight.Bold
+                                        fontWeight = FontWeight.Bold,
                                     )
                                     Text(
-                                        String.format("%.2f MB to be freed", selectedSizeMb),
-                                        style = MaterialTheme.typography.bodySmall
+                                        String.format(Locale.getDefault(), "%.2f MB to be freed", selectedSizeMb),
+                                        style = MaterialTheme.typography.bodySmall,
                                     )
                                 }
                             }
-                            IconButton(onClick = {
-                                if (selectedItems.isNotEmpty()) {
-                                    deleteAction = DeleteAction.BySelection(selectedItems)
-                                    showConfirmDeleteDialog = true
+                            
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                // INFO OPTION: Shows the text message content for the selected item
+                                if (selectedItems.size == 1) {
+                                    IconButton(onClick = { showMessageOption = !showMessageOption }) {
+                                        Icon(
+                                            Icons.Default.Info, 
+                                            contentDescription = "Show Message Context",
+                                            tint = if (showMessageOption) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
                                 }
-                            }) {
-                                Icon(
-                                    Icons.Default.Delete, 
-                                    contentDescription = "Move to Trash", 
-                                    tint = MaterialTheme.colorScheme.error,
-                                    modifier = Modifier.size(32.dp)
-                                )
+                                
+                                IconButton(onClick = {
+                                    if (selectedItems.isNotEmpty()) {
+                                        deleteAction = DeleteAction.BySelection(selectedItems)
+                                        showConfirmDeleteDialog = true
+                                    }
+                                }) {
+                                    Icon(
+                                        Icons.Default.Delete, 
+                                        contentDescription = "Delete or Trash", 
+                                        tint = MaterialTheme.colorScheme.error,
+                                        modifier = Modifier.size(32.dp),
+                                    )
+                                }
                             }
+                        }
+                    }
+                }
+                
+                // Individual Message Preview Drawer
+                AnimatedVisibility(
+                    visible = selectionMode && showMessageOption && selectedItems.size == 1 && currentTab == AppTab.CLEANER,
+                    enter = expandVertically(),
+                    exit = shrinkVertically(),
+                ) {
+                    val selectedItem = remember(selectedItems, mediaList) {
+                        mediaList.find { it.uri == selectedItems.first() }
+                    }
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        color = MaterialTheme.colorScheme.secondaryContainer,
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Text("Associated text message:", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSecondaryContainer)
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                text = selectedItem?.messageBody ?: "(No text message found for this media item)",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                            )
                         }
                     }
                 }
@@ -503,99 +545,115 @@ fun SmsAppScreen(
                     selected = currentTab == AppTab.CLEANER,
                     onClick = { currentTab = AppTab.CLEANER },
                     icon = { Icon(Icons.Default.Refresh, null) },
-                    label = { Text("Cleaner") }
+                    label = { Text("Cleaner") },
                 )
                 NavigationBarItem(
                     selected = currentTab == AppTab.TRASH,
                     onClick = { currentTab = AppTab.TRASH },
                     icon = { Icon(Icons.Default.History, null) },
-                    label = { Text("Trash") }
+                    label = { Text("Trash") },
                 )
             }
-        }
+        },
     ) { padding ->
         Box(modifier = Modifier.fillMaxSize().padding(padding)) {
             if (!isDefault) {
-                // If not default app, show explanation screen
+                // Feature gating: Requires Default SMS role
                 DefaultAppExplanation(onRequestDefaultSms)
-            } else if (!smsPermissionsState.allPermissionsGranted) {
-                // If no permissions, show request screen
-                PermissionRequestScreen(smsPermissionsState)
+            } else if (!permissionsState.allPermissionsGranted) {
+                // Feature gating: Requires SMS and Media storage permissions
+                PermissionRequestScreen(permissionsState)
             } else {
-                // Main content
+                // Main content navigation
                 when (currentTab) {
                     AppTab.CLEANER -> CleanerScreen(
                         groupedMedia = groupedMedia,
                         selectionMode = selectionMode,
                         onSelectionModeChange = { selectionMode = it },
                         selectedItems = selectedItems,
-                        onSelectedItemsChange = { selectedItems = it },
-                        imageLoader = imageLoader
+                        onSelectedItemsChange = { 
+                            selectedItems = it
+                            // Hide message body if user selects multiple items
+                            if (it.size != 1) showMessageOption = false
+                        },
+                        imageLoader = imageLoader,
                     )
                     AppTab.TRASH -> TrashScreen(
                         trashedItems = trashedItems,
                         trashDao = trashDao,
                         context = context,
-                        coroutineScope = coroutineScope
+                        coroutineScope = coroutineScope,
                     )
                 }
             }
         }
     }
 
-    // Confirmation dialog for deletion
+    // Confirmation dialog for cleanup actions (Delete vs Trash, Backup option)
     if (showConfirmDeleteDialog) {
         ConfirmDeletionDialog(
             deleteAction = deleteAction,
             deleteAttachmentsOnly = deleteAttachmentsOnly,
             onDeleteAttachmentsOnlyChange = { deleteAttachmentsOnly = it },
+            backupBeforeDelete = backupBeforeDelete,
+            onBackupBeforeDeleteChange = { backupBeforeDelete = it },
             onConfirm = {
                 showConfirmDeleteDialog = false
-                startDeletion(context, workManager, deleteAction, deleteAttachmentsOnly, { currentWorkId = it }, { showDeleteProgressScreen = true })
+                startDeletion(
+                    context, 
+                    workManager, 
+                    deleteAction, 
+                    deleteAttachmentsOnly, 
+                    backupBeforeDelete,
+                    { currentWorkId = it }, 
+                    { showDeleteProgressScreen = true },
+                )
                 selectionMode = false
                 selectedItems = emptySet()
                 deleteAction = null
-                deleteAttachmentsOnly = false
+                backupBeforeDelete = false
+                showMessageOption = false
             },
             onDismiss = {
                 showConfirmDeleteDialog = false
                 deleteAction = null
-            }
+            },
         )
     }
 
-    // Alert for partial cancellations
+    // Alert for partial cancellations (e.g. user stops background work midway)
     if (showCancelledDialog) {
         AlertDialog(
             onDismissRequest = { showCancelledDialog = false },
             title = { Text("Cleanup Partial") },
-            text = { Text("Operation cancelled. $deletedCount items were moved to Trash.") },
-            confirmButton = { Button(onClick = { showCancelledDialog = false }) { Text("OK") } }
+            text = { Text("Operation cancelled. ${deletedCount} items were processed.") },
+            confirmButton = { Button(onClick = { showCancelledDialog = false }) { Text("OK") } },
         )
     }
 }
 
-/** Component showing real-time progress of moving files to trash. */
+/** Component showing real-time progress of moving files to trash or deleting. */
 @Composable
 fun DeletionProgressOverlay(
     totalToDelete: Int,
     deletedCount: Int,
     deletionLog: List<String>,
-    onCancel: () -> Unit
+    isDeleteOnly: Boolean,
+    onCancel: () -> Unit,
 ) {
     Scaffold { padding ->
         Box(
             modifier = Modifier.fillMaxSize().padding(padding),
-            contentAlignment = Alignment.Center
+            contentAlignment = Alignment.Center,
         ) {
             Column(
                 modifier = Modifier.fillMaxSize().padding(32.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
+                horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 Text(
-                    text = "Cleaning Up...",
+                    text = if (isDeleteOnly) "Deleting Permanently..." else "Cleaning Up...",
                     style = MaterialTheme.typography.headlineMedium,
-                    modifier = Modifier.padding(top = 32.dp, bottom = 24.dp)
+                    modifier = Modifier.padding(top = 32.dp, bottom = 24.dp),
                 )
                 
                 LinearProgressIndicator(
@@ -606,7 +664,7 @@ fun DeletionProgressOverlay(
                 Text(
                     text = "$deletedCount / $totalToDelete items processed",
                     style = MaterialTheme.typography.bodyLarge,
-                    modifier = Modifier.padding(top = 8.dp, bottom = 24.dp)
+                    modifier = Modifier.padding(top = 8.dp, bottom = 24.dp),
                 )
 
                 val listState = rememberLazyListState()
@@ -618,33 +676,34 @@ fun DeletionProgressOverlay(
 
                 Card(
                     modifier = Modifier.fillMaxWidth().weight(1f).padding(bottom = 24.dp),
-                    colors = CardDefaults.cardColors(containerColor = Color.Black.copy(alpha = 0.05f))
+                    colors = CardDefaults.cardColors(containerColor = Color.Black.copy(alpha = 0.05f)),
                 ) {
                     LazyColumn(
                         state = listState,
-                        modifier = Modifier.fillMaxSize().padding(8.dp)
+                        modifier = Modifier.fillMaxSize().padding(8.dp),
                     ) {
                         items(deletionLog) { logEntry ->
+                            val prefix = if (isDeleteOnly) "Deleting: " else "Trashing: "
                             Text(
-                                text = "Trashing: $logEntry",
+                                text = "$prefix$logEntry",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = Color.Gray,
-                                modifier = Modifier.padding(vertical = 2.dp)
+                                modifier = Modifier.padding(vertical = 2.dp),
                             )
                         }
                     }
                 }
 
                 Text(
-                    text = "Items are being moved to the internal Trash Can for safety.",
+                    text = if (isDeleteOnly) "Attachments are being removed directly from message storage." else "Items are being moved to the internal Trash Can for safety.",
                     style = MaterialTheme.typography.bodyMedium,
                     textAlign = TextAlign.Center,
-                    modifier = Modifier.padding(bottom = 24.dp)
+                    modifier = Modifier.padding(bottom = 24.dp),
                 )
 
                 Button(
                     onClick = onCancel,
-                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
                 ) {
                     Text("Cancel Operation")
                 }
@@ -659,7 +718,7 @@ fun DefaultAppExplanation(onRequestDefaultSms: () -> Unit) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
-        modifier = Modifier.fillMaxSize().padding(32.dp)
+        modifier = Modifier.fillMaxSize().padding(32.dp),
     ) {
         Icon(Icons.Default.Settings, null, Modifier.size(64.dp).padding(bottom = 16.dp), tint = MaterialTheme.colorScheme.primary)
         Text("Set as Default SMS App", style = MaterialTheme.typography.headlineSmall, textAlign = TextAlign.Center)
@@ -681,7 +740,7 @@ fun PermissionRequestScreen(state: com.google.accompanist.permissions.MultiplePe
         Icon(Icons.Default.Info, null, Modifier.size(64.dp).padding(bottom = 16.dp))
         Text("Permissions Required", style = MaterialTheme.typography.headlineSmall)
         Spacer(Modifier.height(16.dp))
-        Text("SMS permission is required to access media. Please grant it to continue.", textAlign = TextAlign.Center)
+        Text("Storage permissions are required to scan and backup media. Please grant them to continue.", textAlign = TextAlign.Center)
         Spacer(Modifier.height(24.dp))
         Button(onClick = { state.launchMultiplePermissionRequest() }) { Text("Grant Permissions") }
     }
@@ -696,7 +755,7 @@ fun CleanerScreen(
     onSelectionModeChange: (Boolean) -> Unit,
     selectedItems: Set<Uri>,
     onSelectedItemsChange: (Set<Uri>) -> Unit,
-    imageLoader: ImageLoader
+    imageLoader: ImageLoader,
 ) {
     val context = LocalContext.current
     if (groupedMedia.isEmpty()) {
@@ -707,10 +766,10 @@ fun CleanerScreen(
         LazyVerticalGrid(
             columns = GridCells.Adaptive(minSize = 128.dp),
             contentPadding = PaddingValues(4.dp),
-            modifier = Modifier.fillMaxSize()
+            modifier = Modifier.fillMaxSize(),
         ) {
             groupedMedia.forEach { group ->
-                // Group Header (Month/Year)
+                // Group Header (Month/Year) - Clickable for bulk selection
                 item(span = { GridItemSpan(maxLineSpan) }) {
                     Text(
                         text = group.groupTitle,
@@ -718,11 +777,10 @@ fun CleanerScreen(
                         modifier = Modifier
                             .padding(8.dp)
                             .clickable {
-                                // Bulk select group logic
                                 if (!selectionMode) onSelectionModeChange(true)
                                 val allSelected = selectedItems.containsAll(group.uris)
                                 onSelectedItemsChange(if (allSelected) selectedItems - group.uris else selectedItems + group.uris)
-                            }
+                            },
                     )
                 }
                 // Media Grid Items
@@ -744,10 +802,10 @@ fun CleanerScreen(
                                         onSelectionModeChange(true)
                                         onSelectedItemsChange(selectedItems + item.uri)
                                     }
-                                }
+                                },
                             )
                             .border(3.dp, if (selectedItems.contains(item.uri)) MaterialTheme.colorScheme.primary else Color.Transparent),
-                        elevation = CardDefaults.cardElevation(2.dp)
+                        elevation = CardDefaults.cardElevation(2.dp),
                     ) {
                         Box(Modifier.fillMaxSize()) {
                             AsyncImage(model = request, imageLoader = imageLoader, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.aspectRatio(1f))
@@ -757,7 +815,7 @@ fun CleanerScreen(
                             Text(
                                 text = dateFormat.format(LocalDateTime.ofInstant(Instant.ofEpochMilli(item.date), ZoneId.systemDefault())),
                                 modifier = Modifier.align(Alignment.BottomCenter).background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black))).padding(4.dp),
-                                color = Color.White, fontSize = 10.sp
+                                color = Color.White, fontSize = 10.sp,
                             )
                         }
                     }
@@ -773,7 +831,7 @@ fun TrashScreen(
     trashedItems: List<TrashedItem>,
     trashDao: com.ubermicrostudios.textimagecleaner.data.TrashDao,
     context: Context,
-    coroutineScope: kotlinx.coroutines.CoroutineScope
+    coroutineScope: kotlinx.coroutines.CoroutineScope,
 ) {
     if (trashedItems.isEmpty()) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -782,78 +840,136 @@ fun TrashScreen(
     } else {
         LazyColumn(Modifier.fillMaxSize()) {
             items(trashedItems, key = { it.uriString }) { item ->
-                Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    val file = File(context.filesDir, "trash/${item.fileName}")
-                    AsyncImage(model = file, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.size(64.dp).border(1.dp, Color.Gray))
-                    Spacer(Modifier.width(12.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text(item.mimeType, style = MaterialTheme.typography.labelSmall)
-                        val date = LocalDateTime.ofInstant(Instant.ofEpochMilli(item.trashedDate), ZoneId.systemDefault())
-                        Text("Trashed: ${date.format(DateTimeFormatter.ofPattern("MMM dd, HH:mm"))}", style = MaterialTheme.typography.bodySmall)
+                var showMessageBody by remember { mutableStateOf(false) }
+                
+                Column {
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(8.dp)
+                            .clickable { showMessageBody = !showMessageBody }, 
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        val file = File(context.filesDir, "trash/${item.fileName}")
+                        AsyncImage(model = file, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.size(64.dp).border(1.dp, Color.Gray))
+                        Spacer(Modifier.width(12.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(item.mimeType, style = MaterialTheme.typography.labelSmall)
+                            val date = LocalDateTime.ofInstant(Instant.ofEpochMilli(item.trashedDate), ZoneId.systemDefault())
+                            Text("Trashed: ${date.format(DateTimeFormatter.ofPattern("MMM dd, HH:mm"))}", style = MaterialTheme.typography.bodySmall)
+                            if (item.messageBody != null) {
+                                Text("Click to view message", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                            }
+                        }
+                        // Restore to Gallery Button
+                        IconButton(onClick = {
+                            coroutineScope.launch {
+                                MediaUtils.restoreToGallery(context, item)
+                                trashDao.delete(item)
+                                file.delete()
+                                Toast.makeText(context, "Restored to Gallery", Toast.LENGTH_SHORT).show()
+                            }
+                        }) { Icon(Icons.Default.Restore, "Restore") }
+                        // Delete Permanently Button
+                        IconButton(onClick = {
+                            coroutineScope.launch {
+                                trashDao.delete(item)
+                                file.delete()
+                            }
+                        }) { Icon(Icons.Default.DeleteForever, "Delete Permanently", tint = MaterialTheme.colorScheme.error) }
                     }
-                    // Restore to Gallery Button
-                    IconButton(onClick = {
-                        coroutineScope.launch {
-                            restoreToGallery(context, item)
-                            trashDao.delete(item)
-                            file.delete()
-                            Toast.makeText(context, "Restored to Gallery", Toast.LENGTH_SHORT).show()
+                    
+                    // Expands to show captured text message context
+                    AnimatedVisibility(visible = showMessageBody) {
+                        Surface(
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            shape = MaterialTheme.shapes.small,
+                        ) {
+                            Text(
+                                text = item.messageBody ?: "(No message text found)",
+                                modifier = Modifier.padding(12.dp),
+                                style = MaterialTheme.typography.bodySmall,
+                            )
                         }
-                    }) { Icon(Icons.Default.Restore, "Restore") }
-                    // Delete Permanently Button
-                    IconButton(onClick = {
-                        coroutineScope.launch {
-                            trashDao.delete(item)
-                            file.delete()
-                        }
-                    }) { Icon(Icons.Default.DeleteForever, "Delete Permanently", tint = MaterialTheme.colorScheme.error) }
+                    }
+                    HorizontalDivider(Modifier.padding(horizontal = 16.dp))
                 }
-                HorizontalDivider(Modifier.padding(horizontal = 16.dp))
             }
         }
     }
 }
 
-/** Dialog for confirming cleanup actions. */
+/** Dialog for confirming cleanup actions. Includes safety warnings for permanent deletion. */
 @Composable
 fun ConfirmDeletionDialog(
     deleteAction: DeleteAction?,
     deleteAttachmentsOnly: Boolean,
     onDeleteAttachmentsOnlyChange: (Boolean) -> Unit,
+    backupBeforeDelete: Boolean,
+    onBackupBeforeDeleteChange: (Boolean) -> Unit,
     onConfirm: () -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Confirm Cleanup") },
         text = {
             Column {
-                Text(when (deleteAction) {
-                    is DeleteAction.BySelection -> "Move ${deleteAction.uris.size} items to Trash?"
+                val message = when (deleteAction) {
+                    is DeleteAction.BySelection -> {
+                        if (deleteAttachmentsOnly) "Permanently delete ${deleteAction.uris.size} attachments?"
+                        else "Move ${deleteAction.uris.size} items to Trash?"
+                    }
                     is DeleteAction.EmptyMessages -> "Delete all empty text message threads?"
                     else -> ""
-                })
+                }
+                Text(message)
+                
+                // Safety warning when bypassing the internal trash
+                if (deleteAction is DeleteAction.BySelection && deleteAttachmentsOnly) {
+                    Text(
+                        "Warning: These will NOT be moved to Trash and cannot be restored by this app.", 
+                        color = MaterialTheme.colorScheme.error, 
+                        style = MaterialTheme.typography.labelSmall,
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
+                }
+
                 if (deleteAction is DeleteAction.BySelection) {
+                    Spacer(Modifier.height(8.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Checkbox(deleteAttachmentsOnly, onDeleteAttachmentsOnlyChange)
                         Text("Delete attachments only (keep text)")
                     }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(backupBeforeDelete, onBackupBeforeDeleteChange)
+                        Text("Backup to Gallery before delete")
+                    }
                 }
             }
         },
-        confirmButton = { Button(onClick = onConfirm) { Text("Confirm") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+        confirmButton = { 
+            Button(
+                onClick = onConfirm,
+                colors = if (deleteAttachmentsOnly) ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error) else ButtonDefaults.buttonColors(),
+            ) { 
+                Text(if (deleteAttachmentsOnly) "Delete Permanently" else "Move to Trash") 
+            } 
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }
 
-/** Helper function to prepare data and enqueue a DeletionWorker. */
+/** Helper function to prepare selection data and enqueue a background DeletionWorker. */
 private fun startDeletion(
     context: Context,
     workManager: WorkManager,
     action: DeleteAction?,
     attachmentsOnly: Boolean,
+    backupBeforeDelete: Boolean,
     onId: (UUID) -> Unit,
-    onShow: () -> Unit
+    onShow: () -> Unit,
 ) {
     if (action == null) return
     val workBuilder = OneTimeWorkRequestBuilder<DeletionWorker>()
@@ -862,7 +978,8 @@ private fun startDeletion(
         file.writeText(action.uris.joinToString("\n"))
         workBuilder.setInputData(workDataOf(
             DeletionWorker.KEY_URIS_FILE_PATH to file.absolutePath,
-            DeletionWorker.KEY_DELETE_ATTACHMENTS_ONLY to attachmentsOnly
+            DeletionWorker.KEY_DELETE_ATTACHMENTS_ONLY to attachmentsOnly,
+            DeletionWorker.KEY_BACKUP_BEFORE_DELETE to backupBeforeDelete,
         ))
     } else {
         workBuilder.setInputData(workDataOf(DeletionWorker.KEY_DELETE_EMPTY_MESSAGES to true))
@@ -871,79 +988,4 @@ private fun startDeletion(
     workManager.enqueue(request)
     onId(request.id)
     onShow()
-}
-
-/** 
- * Moves an item from internal trash back to the public gallery storage.
- * (Note: Does not restore it back to the SMS app, but makes it visible in Photos/Gallery).
- */
-private suspend fun restoreToGallery(context: Context, item: TrashedItem) = withContext(Dispatchers.IO) {
-    val file = File(context.filesDir, "trash/${item.fileName}")
-    if (!file.exists()) return@withContext
-
-    val values = ContentValues().apply {
-        put(MediaStore.MediaColumns.DISPLAY_NAME, "Restored_${item.fileName}")
-        put(MediaStore.MediaColumns.MIME_TYPE, item.mimeType)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/TextImageCleaner")
-            put(MediaStore.MediaColumns.IS_PENDING, 1)
-        }
-    }
-
-    val collection = if (item.mimeType.startsWith("video/")) MediaStore.Video.Media.EXTERNAL_CONTENT_URI else MediaStore.Images.Media.EXTERNAL_CONTENT_URI
-    val uri = context.contentResolver.insert(collection, values)
-    
-    uri?.let { destUri ->
-        context.contentResolver.openOutputStream(destUri)?.use { out ->
-            FileInputStream(file).use { it.copyTo(out) }
-        }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            values.clear()
-            values.put(MediaStore.MediaColumns.IS_PENDING, 0)
-            context.contentResolver.update(destUri, values, null, null)
-        }
-    }
-}
-
-/** 
- * Queries the system Telephony provider to find all media attachments in MMS messages.
- */
-private suspend fun loadMmsMedia(contentResolver: ContentResolver): List<MediaItem> = withContext(Dispatchers.IO) {
-    val messageDates = mutableMapOf<Long, Long>()
-    // First, map MMS message IDs to their dates
-    contentResolver.query(Telephony.Mms.CONTENT_URI, arrayOf(Telephony.Mms._ID, Telephony.Mms.DATE), null, null, null)?.use { cursor ->
-        val idCol = cursor.getColumnIndexOrThrow(Telephony.Mms._ID)
-        val dateCol = cursor.getColumnIndexOrThrow(Telephony.Mms.DATE)
-        while (cursor.moveToNext()) {
-            val rawDate = cursor.getLong(dateCol)
-            // Fix for dates stored in seconds vs milliseconds
-            messageDates[cursor.getLong(idCol)] = if (rawDate < 10_000_000_000L) rawDate * 1000 else rawDate
-        }
-    }
-
-    val mediaItems = mutableListOf<MediaItem>()
-    // Next, query all 'parts' that are images or videos
-    val selection = "${Telephony.Mms.Part.CONTENT_TYPE} LIKE 'image/%' OR ${Telephony.Mms.Part.CONTENT_TYPE} LIKE 'video/%'"
-    contentResolver.query(Telephony.Mms.CONTENT_URI.buildUpon().appendPath("part").build(), arrayOf(Telephony.Mms.Part._ID, Telephony.Mms.Part.MSG_ID, Telephony.Mms.Part.CONTENT_TYPE, "_data"), selection, null, null)?.use { cursor ->
-        val idCol = cursor.getColumnIndexOrThrow(Telephony.Mms.Part._ID)
-        val msgIdCol = cursor.getColumnIndexOrThrow(Telephony.Mms.Part.MSG_ID)
-        val typeCol = cursor.getColumnIndexOrThrow(Telephony.Mms.Part.CONTENT_TYPE)
-        while (cursor.moveToNext()) {
-            val partId = cursor.getLong(idCol)
-            val msgId = cursor.getLong(msgIdCol)
-            val date = messageDates[msgId] ?: 0L
-            val uri = Telephony.Mms.CONTENT_URI.buildUpon().appendPath("part").appendPath(partId.toString()).build()
-            
-            // Efficiently get the file size using AVD
-            val size = try {
-                contentResolver.openAssetFileDescriptor(uri, "r")?.use { it.length } ?: 0L
-            } catch (e: Exception) {
-                0L
-            }
-            
-            mediaItems.add(MediaItem(uri, date, cursor.getString(typeCol), if (size < 0) 0L else size))
-        }
-    }
-    // Sort newest first
-    mediaItems.sortedByDescending { it.date }
 }

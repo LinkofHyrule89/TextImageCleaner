@@ -12,7 +12,8 @@ android {
 
     defaultConfig {
         applicationId = "com.ubermicrostudios.textimagecleaner"
-        minSdk = 26 // Android 8.0 (Oreo) - Required for notification channels and modern background work
+        // Refocused on modern devices: Android 15, 16, and 17 Beta
+        minSdk = 35
         targetSdk = 36
         versionCode = 1
         versionName = "1.0"

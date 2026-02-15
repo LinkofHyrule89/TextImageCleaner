@@ -9,7 +9,7 @@ import androidx.room.RoomDatabase
  * The Room database for the application.
  * Manages the persistence of metadata for items moved to the internal trash.
  */
-@Database(entities = [TrashedItem::class], version = 1, exportSchema = false)
+@Database(entities = [TrashedItem::class], version = 2, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
     
     /** Provides access to the TrashDao. */
@@ -21,6 +21,7 @@ abstract class AppDatabase : RoomDatabase() {
 
         /**
          * Returns the singleton instance of the AppDatabase.
+         * Version 2 includes 'messageBody' in TrashedItem.
          */
         fun getDatabase(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
@@ -28,7 +29,9 @@ abstract class AppDatabase : RoomDatabase() {
                     context.applicationContext,
                     AppDatabase::class.java,
                     "trash_database"
-                ).build()
+                )
+                .fallbackToDestructiveMigration() // Reset DB on schema change for development simplicity
+                .build()
                 INSTANCE = instance
                 instance
             }
