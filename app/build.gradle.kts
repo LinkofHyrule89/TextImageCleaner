@@ -1,13 +1,13 @@
 plugins {
     alias(libs.plugins.android.application)
+    alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
-    alias(libs.plugins.ksp)
+    id("org.jetbrains.kotlin.kapt")
 }
 
 android {
     namespace = "com.ubermicrostudios.textimagecleaner"
     
-    // Updated for Android 17 readiness
     compileSdk = 36
 
     defaultConfig {
@@ -53,13 +53,11 @@ kotlin {
 }
 
 dependencies {
-    // Core AndroidX
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     
-    // Jetpack Compose
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.ui.graphics)
@@ -68,25 +66,19 @@ dependencies {
     implementation(libs.androidx.compose.material.icons.extended)
     implementation(libs.androidx.compose.runtime.livedata)
 
-    // Permissions (Accompanist)
     implementation(libs.accompanist.permissions)
     
-    // Image & Video Loading (Coil)
     implementation(libs.coil.compose)
     implementation(libs.coil.video)
     
-    // Background Work (WorkManager)
     implementation(libs.androidx.work.runtime.ktx)
 
-    // Local Database (Room) - using KSP
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
-    ksp(libs.androidx.room.compiler)
+    kapt(libs.androidx.room.compiler)
 
-    // Key-Value Storage (DataStore)
     implementation(libs.androidx.datastore.preferences)
 
-    // Testing
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
