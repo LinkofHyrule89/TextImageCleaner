@@ -26,6 +26,8 @@ import java.io.File
 import java.io.FileOutputStream
 import java.util.UUID
 
+// region DeletionWorker - Background Processing
+
 /**
  * Background worker responsible for the heavy lifting of processing media from system MMS storage.
  * It handles moving items to the internal trash, permanent deletion of attachments, and 
@@ -391,3 +393,5 @@ class DeletionWorker(appContext: Context, params: WorkerParameters) :
         return applicationContext.contentResolver.delete(Telephony.Sms.CONTENT_URI, selection, null)
     }
 }
+
+// endregion

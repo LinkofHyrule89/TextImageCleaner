@@ -22,6 +22,19 @@ Unlike standard SMS apps, this tool aggregates all image and video attachments i
 Requirement to use the app:
 To use this app you will have to temporarily set the app as the default SMS app since this is the only way to access the message storage. You will not be able to text while it is deleting the images/videos and sometimes this can take a while. i did make it work in the background with a notification though.
 
+## Development Notes — Vibe Coding & Low Token Optimization
+
+This codebase is being actively optimized for **pleasant AI-assisted development** (especially with Cursor and multi-agent workflows) with a strong focus on **low token usage** during editing and analysis sessions.
+
+**Goals:**
+- Clear separation of concerns and file boundaries so agents only load relevant context
+- Concise but highly readable modern Kotlin + Compose idioms
+- Reduced visual noise and redundant comments
+- Better navigation (region markers, logical grouping)
+- Architecture that stays friendly to iterative AI refactors
+
+This commit is the first in a planned series. Future passes will include ViewModel extraction, composable splitting, and further conciseness improvements.
+
 ## License
 
 This project is licensed under the AGPL-3.0 License. See the [LICENSE](LICENSE) file for details.

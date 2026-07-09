@@ -114,12 +114,14 @@ import java.time.format.DateTimeFormatter
 import java.util.Locale
 import java.util.UUID
 
+// region Data Models
+
 /** UI model for a single media item found in MMS. */
 data class MediaItem(
-    val uri: Uri, 
-    val date: Long, 
-    val mimeType: String, 
-    val size: Long = 0, 
+    val uri: Uri,
+    val date: Long,
+    val mimeType: String,
+    val size: Long = 0,
     val messageBody: String? = null,
 )
 
@@ -137,6 +139,10 @@ enum class AppTab { CLEANER, TRASH }
 
 /** Enum for filtering media types in the cleaner view. */
 enum class MediaTypeFilter { ALL, IMAGES, VIDEOS }
+
+// endregion
+
+// region MainActivity
 
 class MainActivity : ComponentActivity() {
 
@@ -208,6 +214,10 @@ class MainActivity : ComponentActivity() {
         startActivity(intent)
     }
 }
+
+// endregion
+
+// region Main Screen + State Management
 
 /** Main entry point for the Compose UI. */
 @OptIn(
@@ -632,6 +642,10 @@ fun SmsAppScreen(
     }
 }
 
+// endregion
+
+// region Progress & Onboarding Composables
+
 /** Component showing real-time progress of moving files to trash or deleting. */
 @Composable
 fun DeletionProgressOverlay(
@@ -745,6 +759,10 @@ fun PermissionRequestScreen(state: com.google.accompanist.permissions.MultiplePe
         Button(onClick = { state.launchMultiplePermissionRequest() }) { Text("Grant Permissions") }
     }
 }
+
+// endregion
+
+// region Main Feature Composables (Cleaner / Trash)
 
 /** Grid view showing all media items found in MMS messages. */
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
@@ -900,6 +918,10 @@ fun TrashScreen(
     }
 }
 
+// endregion
+
+// region Dialogs
+
 /** Dialog for confirming cleanup actions. Includes safety warnings for permanent deletion. */
 @Composable
 fun ConfirmDeletionDialog(
@@ -961,6 +983,10 @@ fun ConfirmDeletionDialog(
     )
 }
 
+// endregion
+
+// region Helpers
+
 /** Helper function to prepare selection data and enqueue a background DeletionWorker. */
 private fun startDeletion(
     context: Context,
@@ -989,3 +1015,5 @@ private fun startDeletion(
     onId(request.id)
     onShow()
 }
+
+// endregion
