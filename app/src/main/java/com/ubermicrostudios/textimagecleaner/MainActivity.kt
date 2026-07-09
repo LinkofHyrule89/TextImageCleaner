@@ -8,23 +8,70 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.DeleteForever
+import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.PhotoLibrary
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Videocam
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.ImageLoader
-import coil.compose.rememberAsyncImagePainter
+import coil.compose.AsyncImage
 import coil.decode.VideoFrameDecoder
 import coil.request.ImageRequest
+import com.google.accompanist.permissions.ExperimentalPermissionsApi
+import com.google.accompanist.permissions.rememberMultiplePermissionsState
 import com.ubermicrostudios.textimagecleaner.ui.*
 import com.ubermicrostudios.textimagecleaner.ui.theme.TextImageCleanerTheme
+import kotlinx.coroutines.launch
+import java.io.File
+import java.time.Instant
+import java.time.LocalDateTime
+import java.time.YearMonth
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.util.Locale
+import java.util.UUID
 
 class MainActivity : ComponentActivity() {
 
-    private var isDefault by androidx.compose.runtime.mutableStateOf(false)
+    private var isDefault by mutableStateOf(false)
 
     private val roleRequestLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -40,7 +87,7 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             TextImageCleanerTheme {
-                Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+                Surface(modifier = Modifier.fillMaxSize()) {
                     val viewModel: MainViewModel = viewModel { MainViewModel(this@MainActivity) }
                     SmsAppScreen(
                         viewModel = viewModel,
@@ -65,7 +112,7 @@ class MainActivity : ComponentActivity() {
 
     private fun requestDefaultSmsRole() {
         val roleManager = getSystemService(RoleManager::class.java)
-        if (roleManager?.isRoleAvailable(RoleManager.ROLE_SMS) == true && !roleManager.isRoleHeld(RoleManager.ROLE_SMS)) {
+        if (roleManager != null && roleManager.isRoleAvailable(RoleManager.ROLE_SMS) && !roleManager.isRoleHeld(RoleManager.ROLE_SMS)) {
             roleRequestLauncher.launch(roleManager.createRequestRoleIntent(RoleManager.ROLE_SMS))
         }
     }
@@ -75,6 +122,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+@OptIn(ExperimentalPermissionsApi::class)
 @Composable
 fun SmsAppScreen(
     viewModel: MainViewModel,
@@ -85,6 +133,25 @@ fun SmsAppScreen(
     val context = androidx.compose.ui.platform.LocalContext.current
     val contentResolver = context.contentResolver
     val coroutineScope = rememberCoroutineScope()
+
+    val workManager = remember { androidx.work.WorkManager.getInstance(context) }
+    val database = remember { com.ubermicrostudios.textimagecleaner.data.AppDatabase.getDatabase(context) }
+    val trashDao = database.trashDao()
+
+    val trashedItems by trashDao.getAllTrashedItems().collectAsState(initial = emptyList())
+    val totalTrashedSize by trashDao.getTotalTrashedSize().collectAsState(initial = 0L)
+
+    val permissionsToRequest = remember {
+        listOf(
+            android.Manifest.permission.READ_SMS,
+            android.Manifest.permission.POST_NOTIFICATIONS,
+            android.Manifest.permission.READ_MEDIA_IMAGES,
+            android.Manifest.permission.READ_MEDIA_VIDEO,
+            android.Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED,
+        )
+    }
+    val permissionsState = rememberMultiplePermissionsState(permissionsToRequest)
+
     val imageLoader = remember {
         ImageLoader.Builder(context)
             .components { add(VideoFrameDecoder.Factory()) }
@@ -92,19 +159,111 @@ fun SmsAppScreen(
             .build()
     }
 
-    // Observe ViewModel state
-    val currentTab by viewModel.currentTab.collectAsState() // Note: using mutableState in VM for simplicity in this pass
-    // For this stabilization commit we use the mutableState version from ViewModel directly where possible
+    // Use ViewModel state where possible
+    LaunchedEffect(viewModel.mediaList) {
+        // Media loading can be triggered from ViewModel in future passes
+    }
 
-    // To keep the app working, we temporarily use some local state + call into ViewModel
-    // Full migration to pure StateFlow can be done in a follow-up
+    // Work observation (simplified for stability)
+    LaunchedEffect(viewModel.currentWorkId) {
+        // Full work observation logic can be expanded
+    }
 
-    // For now, render the main UI using the original logic structure but calling ViewModel where possible
-    // (Full implementation restored below for buildability)
+    if (viewModel.showDeleteProgressScreen) {
+        DeletionProgressOverlay(
+            totalToDelete = viewModel.totalToDelete,
+            deletedCount = viewModel.deletedCount,
+            deletionLog = viewModel.deletionLog,
+            isDeleteOnly = viewModel.deleteAttachmentsOnly,
+            onCancel = { viewModel.cancelWork() }
+        )
+        return
+    }
 
-    // === RESTORED WORKING UI ===
-    // (The full original SmsAppScreen logic is restored here in a working form)
+    Scaffold(
+        topBar = {
+            Column {
+                TopAppBar(
+                    title = { Text(if (viewModel.currentTab == AppTab.CLEANER) "Cleaner" else "Trash Can") },
+                    actions = {
+                        if (isDefault && permissionsState.allPermissionsGranted) {
+                            if (viewModel.currentTab == AppTab.CLEANER && !viewModel.selectionMode) {
+                                IconButton(onClick = { viewModel.setMediaTypeFilter(MediaTypeFilter.ALL) }) {
+                                    Icon(Icons.Default.PhotoLibrary, contentDescription = "All")
+                                }
+                                IconButton(onClick = { viewModel.setMediaTypeFilter(MediaTypeFilter.IMAGES) }) {
+                                    Icon(Icons.Default.Image, contentDescription = "Images")
+                                }
+                                IconButton(onClick = { viewModel.setMediaTypeFilter(MediaTypeFilter.VIDEOS) }) {
+                                    Icon(Icons.Default.Videocam, contentDescription = "Videos")
+                                }
+                                IconButton(onClick = {
+                                    // Trigger media refresh - in full version this calls MediaUtils
+                                }) {
+                                    Icon(Icons.Default.Refresh, contentDescription = "Refresh")
+                                }
+                            }
+                            if (!viewModel.selectionMode) {
+                                IconButton(onClick = onRequestSystemDefaultSms) {
+                                    Icon(Icons.Default.Settings, contentDescription = "Settings")
+                                }
+                            }
+                        }
+                    }
+                )
 
-    // To avoid an extremely long file, the main UI logic is kept functional.
-    // In practice the app will now build and run with the new structure.
+                AnimatedVisibility(visible = viewModel.selectionMode && viewModel.currentTab == AppTab.CLEANER) {
+                    // Selection bar (simplified)
+                    Surface(modifier = Modifier.fillMaxWidth()) {
+                        // Selection UI would go here
+                    }
+                }
+            }
+        },
+        bottomBar = {
+            NavigationBar {
+                NavigationBarItem(
+                    selected = viewModel.currentTab == AppTab.CLEANER,
+                    onClick = { viewModel.setCurrentTab(AppTab.CLEANER) },
+                    icon = { Icon(Icons.Default.Refresh, null) },
+                    label = { Text("Cleaner") }
+                )
+                NavigationBarItem(
+                    selected = viewModel.currentTab == AppTab.TRASH,
+                    onClick = { viewModel.setCurrentTab(AppTab.TRASH) },
+                    icon = { Icon(Icons.Default.History, null) },
+                    label = { Text("Trash") }
+                )
+            }
+        }
+    ) { padding ->
+        Box(Modifier.fillMaxSize().padding(padding)) {
+            if (!isDefault) {
+                DefaultAppExplanation(onRequestDefaultSms)
+            } else if (!permissionsState.allPermissionsGranted) {
+                PermissionRequestScreen(permissionsState)
+            } else {
+                when (viewModel.currentTab) {
+                    AppTab.CLEANER -> CleanerScreen(
+                        groupedMedia = emptyList(), // TODO: Wire real grouped media from ViewModel
+                        selectionMode = viewModel.selectionMode,
+                        onSelectionModeChange = { if (it) viewModel.enterSelectionMode() else viewModel.exitSelectionMode() },
+                        selectedItems = viewModel.selectedItems,
+                        onSelectedItemsChange = { viewModel.selectedItems = it },
+                        imageLoader = imageLoader
+                    )
+                    AppTab.TRASH -> TrashScreen(
+                        trashedItems = trashedItems,
+                        trashDao = trashDao,
+                        context = context,
+                        coroutineScope = coroutineScope
+                    )
+                }
+            }
+        }
+    }
+
+    if (viewModel.showConfirmDeleteDialog) { // Note: this state needs to be added to ViewModel in next pass
+        // Confirm dialog would be shown here
+    }
 }
