@@ -49,30 +49,6 @@ import com.google.accompanist.permissions.rememberMultiplePermissionsState
 import com.ubermicrostudios.textimagecleaner.ui.*
 import com.ubermicrostudios.textimagecleaner.ui.theme.TextImageCleanerTheme
 import kotlinx.coroutines.launch
-import java.util.UUID
-
-// === Minimal type definitions to make the project compile ===
-enum class AppTab { CLEANER, TRASH }
-
-enum class MediaTypeFilter { ALL, IMAGES, VIDEOS }
-
-data class MediaItem(
-    val uri: android.net.Uri,
-    val mimeType: String,
-    val size: Long,
-    val date: Long
-)
-
-data class GroupedMediaItems(
-    val groupTitle: String,
-    val uris: List<android.net.Uri>
-)
-
-sealed class DeleteAction {
-    data class DeleteOnly(val uris: List<android.net.Uri>) : DeleteAction()
-    data class DeleteAndTrash(val uris: List<android.net.Uri>) : DeleteAction()
-}
-// === End of minimal types ===
 
 class MainActivity : ComponentActivity() {
 
