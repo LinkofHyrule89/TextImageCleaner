@@ -40,6 +40,6 @@ interface TrashDao {
     /**
      * Calculates the total size of all items currently in the trash.
      */
-    @Query("SELECT SUM(fileSize) FROM trashed_items")
-    fun getTotalTrashedSize(): Flow<Long?>
+    @Query("SELECT COALESCE(SUM(fileSize), 0) FROM trashed_items")
+    fun getTotalTrashedSize(): Flow<Long>
 }
