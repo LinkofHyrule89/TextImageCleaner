@@ -10,10 +10,6 @@ import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import androidx.work.workDataOf
 import com.ubermicrostudios.textimagecleaner.data.AppDatabase
-import com.ubermicrostudios.textimagecleaner.data.TrashedItem
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import java.io.File
 import java.util.UUID
@@ -24,158 +20,132 @@ class MainViewModel(private val context: Context) : ViewModel() {
     private val database = AppDatabase.getDatabase(context)
     private val trashDao = database.trashDao()
 
-    // UI State
-    private val _currentTab = MutableStateFlow(AppTab.CLEANER)
-    val currentTab: StateFlow<AppTab> = _currentTab.asStateFlow()
+    // State
+    var currentTab by androidx.compose.runtime.mutableStateOf(AppTab.CLEANER)
+        private set
 
-    private val _mediaList = MutableStateFlow<List<MediaItem>>(emptyList())
-    val mediaList: StateFlow<List<MediaItem>> = _mediaList.asStateFlow()
+    var mediaList by androidx.compose.runtime.mutableStateOf<List<MediaItem>>(emptyList())
+        private set
 
-    private val _mediaTypeFilter = MutableStateFlow(MediaTypeFilter.ALL)
-    val mediaTypeFilter: StateFlow<MediaTypeFilter> = _mediaTypeFilter.asStateFlow()
+    var mediaTypeFilter by androidx.compose.runtime.mutableStateOf(MediaTypeFilter.ALL)
+        private set
 
-    private val _selectedItems = MutableStateFlow<Set<Uri>>(emptySet())
-    val selectedItems: StateFlow<Set<Uri>> = _selectedItems.asStateFlow()
+    var selectedItems by androidx.compose.runtime.mutableStateOf<Set<Uri>>(emptySet())
+        private set
 
-    private val _selectionMode = MutableStateFlow(false)
-    val selectionMode: StateFlow<Boolean> = _selectionMode.asStateFlow()
+    var selectionMode by androidx.compose.runtime.mutableStateOf(false)
+        private set
 
-    private val _showMessageOption = MutableStateFlow(false)
-    val showMessageOption: StateFlow<Boolean> = _showMessageOption.asStateFlow()
+    var showMessageOption by androidx.compose.runtime.mutableStateOf(false)
+        private set
 
-    private val _deleteAttachmentsOnly = MutableStateFlow(false)
-    val deleteAttachmentsOnly: StateFlow<Boolean> = _deleteAttachmentsOnly.asStateFlow()
+    var deleteAttachmentsOnly by androidx.compose.runtime.mutableStateOf(false)
+        private set
 
-    private val _backupBeforeDelete = MutableStateFlow(false)
-    val backupBeforeDelete: StateFlow<Boolean> = _backupBeforeDelete.asStateFlow()
+    var backupBeforeDelete by androidx.compose.runtime.mutableStateOf(false)
+        private set
 
-    // Work / Deletion State
-    private val _currentWorkId = MutableStateFlow<UUID?>(null)
-    val currentWorkId: StateFlow<UUID?> = _currentWorkId.asStateFlow()
+    var showDeleteProgressScreen by androidx.compose.runtime.mutableStateOf(false)
+        private set
 
-    private val _showDeleteProgressScreen = MutableStateFlow(false)
-    val showDeleteProgressScreen: StateFlow<Boolean> = _showDeleteProgressScreen.asStateFlow()
+    var deletedCount by androidx.compose.runtime.mutableIntStateOf(0)
+        private set
 
-    private val _deletedCount = MutableStateFlow(0)
-    val deletedCount: StateFlow<Int> = _deletedCount.asStateFlow()
+    var totalToDelete by androidx.compose.runtime.mutableIntStateOf(0)
+        private set
 
-    private val _totalToDelete = MutableStateFlow(0)
-    val totalToDelete: StateFlow<Int> = _totalToDelete.asStateFlow()
+    var currentWorkId by androidx.compose.runtime.mutableStateOf<UUID?>(null)
+        private set
 
     val deletionLog = mutableStateListOf<String>()
 
-    // Computed / Derived (simplified for now - can be improved with derivedStateOf later)
     val filteredMediaList: List<MediaItem>
-        get() = when (_mediaTypeFilter.value) {
-            MediaTypeFilter.IMAGES -> _mediaList.value.filter { it.mimeType.startsWith("image/") }
-            MediaTypeFilter.VIDEOS -> _mediaList.value.filter { it.mimeType.startsWith("video/") }
-            MediaTypeFilter.ALL -> _mediaList.value
+        get() = when (mediaTypeFilter) {
+            MediaTypeFilter.IMAGES -> mediaList.filter { it.mimeType.startsWith("image/") }
+            MediaTypeFilter.VIDEOS -> mediaList.filter { it.mimeType.startsWith("video/") }
+            else -> mediaList
         }
 
-    fun setCurrentTab(tab: AppTab) {
-        _currentTab.value = tab
-    }
+    fun setCurrentTab(tab: AppTab) { currentTab = tab }
+    fun setMediaTypeFilter(filter: MediaTypeFilter) { mediaTypeFilter = filter }
 
-    fun setMediaTypeFilter(filter: MediaTypeFilter) {
-        _mediaTypeFilter.value = filter
-    }
-
-    fun toggleSelection(uri: Uri) {
-        val current = _selectedItems.value.toMutableSet()
-        if (current.contains(uri)) current.remove(uri) else current.add(uri)
-        _selectedItems.value = current
-        if (current.size != 1) _showMessageOption.value = false
+    fun toggleItemSelection(uri: Uri) {
+        val newSet = selectedItems.toMutableSet()
+        if (newSet.contains(uri)) newSet.remove(uri) else newSet.add(uri)
+        selectedItems = newSet
+        if (selectedItems.size != 1) showMessageOption = false
     }
 
     fun selectAllInGroup(uris: Set<Uri>) {
-        val current = _selectedItems.value.toMutableSet()
-        val allSelected = uris.all { current.contains(it) }
-        if (allSelected) {
-            current.removeAll(uris)
+        val newSet = selectedItems.toMutableSet()
+        if (uris.all { newSet.contains(it) }) {
+            newSet.removeAll(uris)
         } else {
-            current.addAll(uris)
+            newSet.addAll(uris)
         }
-        _selectedItems.value = current
-        if (_selectedItems.value.size != 1) _showMessageOption.value = false
+        selectedItems = newSet
     }
 
-    fun enterSelectionMode() {
-        _selectionMode.value = true
-    }
-
+    fun enterSelectionMode() { selectionMode = true }
     fun exitSelectionMode() {
-        _selectionMode.value = false
-        _selectedItems.value = emptySet()
-        _showMessageOption.value = false
+        selectionMode = false
+        selectedItems = emptySet()
+        showMessageOption = false
     }
 
-    fun toggleShowMessageOption() {
-        _showMessageOption.value = !_showMessageOption.value
-    }
+    fun toggleShowMessageOption() { showMessageOption = !showMessageOption }
 
     fun setDeleteOptions(attachmentsOnly: Boolean, backup: Boolean) {
-        _deleteAttachmentsOnly.value = attachmentsOnly
-        _backupBeforeDelete.value = backup
+        deleteAttachmentsOnly = attachmentsOnly
+        backupBeforeDelete = backup
     }
 
-    fun updateMedia() {
-        viewModelScope.launch {
-            // In real implementation this would call MediaUtils.loadMmsMedia
-            // For now we keep the original call site in the composable for minimal breakage
-        }
+    fun updateMedia(newList: List<MediaItem>) {
+        mediaList = newList
     }
 
-    fun startDeletion(
-        action: DeleteAction,
-        onWorkStarted: (UUID) -> Unit
-    ) {
-        val workBuilder = OneTimeWorkRequestBuilder<DeletionWorker>()
+    fun startDeletion(action: DeleteAction, onStarted: (UUID) -> Unit) {
+        val builder = OneTimeWorkRequestBuilder<DeletionWorker>()
 
         if (action is DeleteAction.BySelection) {
             val file = File(context.cacheDir, "uris_to_delete.txt")
             file.writeText(action.uris.joinToString("\n"))
-            workBuilder.setInputData(
-                workDataOf(
-                    DeletionWorker.KEY_URIS_FILE_PATH to file.absolutePath,
-                    DeletionWorker.KEY_DELETE_ATTACHMENTS_ONLY to _deleteAttachmentsOnly.value,
-                    DeletionWorker.KEY_BACKUP_BEFORE_DELETE to _backupBeforeDelete.value,
-                )
-            )
+            builder.setInputData(workDataOf(
+                DeletionWorker.KEY_URIS_FILE_PATH to file.absolutePath,
+                DeletionWorker.KEY_DELETE_ATTACHMENTS_ONLY to deleteAttachmentsOnly,
+                DeletionWorker.KEY_BACKUP_BEFORE_DELETE to backupBeforeDelete
+            ))
         } else {
-            workBuilder.setInputData(workDataOf(DeletionWorker.KEY_DELETE_EMPTY_MESSAGES to true))
+            builder.setInputData(workDataOf(DeletionWorker.KEY_DELETE_EMPTY_MESSAGES to true))
         }
 
-        val request = workBuilder.build()
+        val request = builder.build()
         workManager.enqueue(request)
-        _currentWorkId.value = request.id
-        _showDeleteProgressScreen.value = true
-        onWorkStarted(request.id)
+        currentWorkId = request.id
+        showDeleteProgressScreen = true
+        onStarted(request.id)
     }
 
-    fun cancelCurrentWork() {
-        _currentWorkId.value?.let { workManager.cancelWorkById(it) }
+    fun cancelWork() {
+        currentWorkId?.let { workManager.cancelWorkById(it) }
     }
 
     fun onWorkFinished(wasCancelled: Boolean) {
-        _showDeleteProgressScreen.value = false
-        _currentWorkId.value = null
+        showDeleteProgressScreen = false
+        currentWorkId = null
         deletionLog.clear()
-        _selectedItems.value = emptySet()
-        _selectionMode.value = false
-        _showMessageOption.value = false
-
         if (!wasCancelled) {
-            // Trigger refresh from outside (or expose a refresh trigger)
+            // caller should refresh media
         }
     }
 
-    fun updateWorkProgress(total: Int, deleted: Int, lastItem: String?) {
+    fun updateProgress(total: Int, deleted: Int, lastItem: String?) {
         if (total > 0) {
-            _totalToDelete.value = total
-            _deletedCount.value = deleted
+            totalToDelete = total
+            deletedCount = deleted
         }
-        if (lastItem != null && (deletionLog.isEmpty() || deletionLog.last() != lastItem)) {
-            deletionLog.add(lastItem)
+        lastItem?.let {
+            if (deletionLog.isEmpty() || deletionLog.last() != it) deletionLog.add(it)
         }
     }
 }
