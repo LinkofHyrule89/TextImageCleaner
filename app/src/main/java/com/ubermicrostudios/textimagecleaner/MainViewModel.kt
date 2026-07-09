@@ -2,17 +2,39 @@ package com.ubermicrostudios.textimagecleaner
 
 import android.content.Context
 import android.net.Uri
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
-import androidx.lifecycle.viewModelScope
 import androidx.work.OneTimeWorkRequestBuilder
-import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import androidx.work.workDataOf
 import com.ubermicrostudios.textimagecleaner.data.AppDatabase
-import kotlinx.coroutines.launch
 import java.io.File
 import java.util.UUID
+
+// Types moved here for visibility
+enum class AppTab { CLEANER, TRASH }
+enum class MediaTypeFilter { ALL, IMAGES, VIDEOS }
+
+data class MediaItem(
+    val uri: Uri,
+    val mimeType: String,
+    val size: Long,
+    val date: Long
+)
+
+sealed class DeleteAction {
+    data class BySelection(val uris: List<Uri>) : DeleteAction()
+    data class EmptyMessages(val value: Boolean = true) : DeleteAction()
+}
+
+data class GroupedMediaItems(
+    val groupTitle: String,
+    val uris: List<Uri>
+)
 
 class MainViewModel(private val context: Context) : ViewModel() {
 
@@ -20,41 +42,40 @@ class MainViewModel(private val context: Context) : ViewModel() {
     private val database = AppDatabase.getDatabase(context)
     private val trashDao = database.trashDao()
 
-    // State
-    var currentTab by androidx.compose.runtime.mutableStateOf(AppTab.CLEANER)
+    // State - using proper delegates
+    var currentTab: AppTab by mutableStateOf(AppTab.CLEANER)
         private set
 
-    var mediaList by androidx.compose.runtime.mutableStateOf<List<MediaItem>>(emptyList())
+    var mediaList: List<MediaItem> by mutableStateOf(emptyList())
         private set
 
-    var mediaTypeFilter by androidx.compose.runtime.mutableStateOf(MediaTypeFilter.ALL)
+    var mediaTypeFilter: MediaTypeFilter by mutableStateOf(MediaTypeFilter.ALL)
         private set
 
-    var selectedItems by androidx.compose.runtime.mutableStateOf<Set<Uri>>(emptySet())
+    var selectedItems: Set<Uri> by mutableStateOf(emptySet())
+
+    var selectionMode: Boolean by mutableStateOf(false)
         private set
 
-    var selectionMode by androidx.compose.runtime.mutableStateOf(false)
+    var showMessageOption: Boolean by mutableStateOf(false)
         private set
 
-    var showMessageOption by androidx.compose.runtime.mutableStateOf(false)
+    var deleteAttachmentsOnly: Boolean by mutableStateOf(false)
         private set
 
-    var deleteAttachmentsOnly by androidx.compose.runtime.mutableStateOf(false)
+    var backupBeforeDelete: Boolean by mutableStateOf(false)
         private set
 
-    var backupBeforeDelete by androidx.compose.runtime.mutableStateOf(false)
+    var showDeleteProgressScreen: Boolean by mutableStateOf(false)
         private set
 
-    var showDeleteProgressScreen by androidx.compose.runtime.mutableStateOf(false)
+    var deletedCount: Int by mutableIntStateOf(0)
         private set
 
-    var deletedCount by androidx.compose.runtime.mutableIntStateOf(0)
+    var totalToDelete: Int by mutableIntStateOf(0)
         private set
 
-    var totalToDelete by androidx.compose.runtime.mutableIntStateOf(0)
-        private set
-
-    var currentWorkId by androidx.compose.runtime.mutableStateOf<UUID?>(null)
+    var currentWorkId: UUID? by mutableStateOf(null)
         private set
 
     val deletionLog = mutableStateListOf<String>()
