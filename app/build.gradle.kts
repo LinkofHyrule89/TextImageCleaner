@@ -1,7 +1,7 @@
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
-    id("org.jetbrains.kotlin.kapt")
+    alias(libs.plugins.ksp)
 }
 
 android {
@@ -57,7 +57,7 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.activity.compose)
-    implementation(libs.androidx.lifecycle.viewmodel.compose) // Added for architecture work
+    implementation(libs.androidx.lifecycle.viewmodel.compose)
     
     // Jetpack Compose
     implementation(platform(libs.androidx.compose.bom))
@@ -68,7 +68,7 @@ dependencies {
     implementation(libs.androidx.compose.material.icons.extended)
     implementation(libs.androidx.compose.runtime.livedata)
 
-    // Permissions (Accompanist - will migrate in Phase 2)
+    // Permissions (Accompanist)
     implementation(libs.accompanist.permissions)
     
     // Image & Video Loading (Coil)
@@ -78,10 +78,10 @@ dependencies {
     // Background Work (WorkManager)
     implementation(libs.androidx.work.runtime.ktx)
 
-    // Local Database (Room)
+    // Local Database (Room) - using KSP
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
-    kapt(libs.androidx.room.compiler)
+    ksp(libs.androidx.room.compiler)
 
     // Key-Value Storage (DataStore)
     implementation(libs.androidx.datastore.preferences)
