@@ -33,7 +33,7 @@ This codebase is being actively optimized for **pleasant AI-assisted development
 - Better navigation (region markers, logical grouping)
 - Architecture that stays friendly to iterative AI refactors
 
-This commit is the first in a planned series. Future passes will include ViewModel extraction, composable splitting, and further conciseness improvements.
+Recent work focused on modernizing the build system, extracting a MainViewModel, splitting UI components, and stabilizing the build for reliable CI.
 
 ## License
 
