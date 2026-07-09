@@ -7,12 +7,11 @@ plugins {
 android {
     namespace = "com.ubermicrostudios.textimagecleaner"
     
-    // Using API 36 (Android 16 "Baklava") for cutting-edge compatibility
+    // Updated for Android 17 readiness
     compileSdk = 36
 
     defaultConfig {
         applicationId = "com.ubermicrostudios.textimagecleaner"
-        // Refocused on modern devices: Android 15, 16, and 17 Beta
         minSdk = 35
         targetSdk = 36
         versionCode = 1
@@ -32,8 +31,8 @@ android {
     }
     
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_11
-        targetCompatibility = JavaVersion.VERSION_11
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
     }
     
     buildFeatures {
@@ -49,7 +48,7 @@ android {
 
 kotlin {
     compilerOptions {
-        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_11)
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
     }
 }
 
@@ -58,6 +57,7 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.activity.compose)
+    implementation(libs.androidx.lifecycle.viewmodel.compose) // Added for architecture work
     
     // Jetpack Compose
     implementation(platform(libs.androidx.compose.bom))
@@ -68,7 +68,7 @@ dependencies {
     implementation(libs.androidx.compose.material.icons.extended)
     implementation(libs.androidx.compose.runtime.livedata)
 
-    // Permissions (Accompanist)
+    // Permissions (Accompanist - will migrate in Phase 2)
     implementation(libs.accompanist.permissions)
     
     // Image & Video Loading (Coil)
