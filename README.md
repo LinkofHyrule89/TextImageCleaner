@@ -49,16 +49,17 @@ See [SECURITY.md](SECURITY.md).
 
 ### Prebuilt APK (recommended)
 
-1. Download the latest APK from **[GitHub Releases](https://github.com/LinkofHyrule89/TextImageCleaner/releases)** (`TextImageCleaner-1.0.0.apk`).  
+1. Download the latest APK from **[GitHub Releases](https://github.com/LinkofHyrule89/TextImageCleaner/releases)**.  
+   - Prefer **`TextImageCleaner-release.apk`** (release-signed) when present.  
+   - Older assets may be debug-signed for sideload only.  
 2. Install via file manager, or:
 
 ```bash
-adb install -r TextImageCleaner-1.0.0.apk
+adb install -r TextImageCleaner-release.apk
 ```
 
-CI also attaches a debug APK to each successful `master` build (Actions → Artifacts).
-
-> The published 1.0.0 build may be **debug-signed** for easy sideload. For Play Store you must sign with your own release keystore.
+CI attaches a **debug** APK on every `master` build (Actions → Artifacts).  
+Tag builds (`v*`) produce a **release-signed** APK via the Release workflow (keystore stored only in GitHub Secrets).
 
 ### Build from source
 
@@ -68,6 +69,24 @@ export ANDROID_HOME=/path/to/Android/Sdk
 ./gradlew assembleDebug
 # APK: app/build/outputs/apk/debug/app-debug.apk
 ```
+
+#### Signed release (maintainers)
+
+Signing material is **not** in the repo. Locally:
+
+1. Keep the keystore private (e.g. `~/.config/textimagecleaner-signing/`).  
+2. Create gitignored `keystore.properties` from `keystore.properties.example`, or export:
+
+```bash
+export KEYSTORE_PATH=/path/to/textimagecleaner-release.jks
+export KEYSTORE_PASSWORD=...
+export KEY_ALIAS=textimagecleaner
+export KEY_PASSWORD=...
+./gradlew assembleRelease
+# → app/build/outputs/apk/release/app-release.apk
+```
+
+CI: secrets `KEYSTORE_BASE64`, `KEYSTORE_PASSWORD`, `KEY_ALIAS`, `KEY_PASSWORD` power `.github/workflows/release.yml` on `v*` tags.
 
 ## Usage (short)
 

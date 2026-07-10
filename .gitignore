@@ -19,6 +19,12 @@ local.properties
 *.ap_
 !releases/README.md
 
+# Release signing material — NEVER commit
+*.jks
+*.keystore
+keystore.properties
+signing.properties
+
 # App module build outputs
 app/build/
 build/
