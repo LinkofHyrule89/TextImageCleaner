@@ -183,39 +183,43 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * Opens the system UI to pick the default SMS app (role picker when available).
-     * Do not use ACTION_CHANGE_DEFAULT with our package when we already hold the role —
-     * that is a no-op and shows no dialog on modern Android.
+     * Opens system UI so the user can pick a different default SMS app.
+     *
+     * When this app already holds ROLE_SMS:
+     * - RoleManager.createRequestRoleIntent / ACTION_CHANGE_DEFAULT often finish immediately
+     *   with no UI (already holder).
+     * - android.intent.action.MANAGE_DEFAULT_APP resolves to DefaultAppActivity but requires
+     *   MANAGE_ROLE_HOLDERS, so third-party apps cannot show that screen (silent failure).
+     *
+     * The reliable path is the Default apps list (same as "Open system default apps"),
+     * with a short hint to open the SMS app entry.
      */
     private fun openChangeDefaultSmsApp() {
-        // API 31+: screen for choosing the default app for a given role (SMS list).
-        // Use action strings for broader compile compatibility.
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        val roleManager = getSystemService(RoleManager::class.java)
+        val alreadyDefault = roleManager?.isRoleHeld(RoleManager.ROLE_SMS) == true
+
+        if (!alreadyDefault &&
+            roleManager != null &&
+            roleManager.isRoleAvailable(RoleManager.ROLE_SMS)
+        ) {
+            // Not default yet: system role request dialog works.
             try {
-                val intent = Intent("android.settings.MANAGE_DEFAULT_APP").apply {
-                    putExtra("android.provider.extra.ROLE_NAME", RoleManager.ROLE_SMS)
-                }
-                if (intent.resolveActivity(packageManager) != null) {
-                    startActivity(intent)
-                    return
-                }
+                roleRequestLauncher.launch(
+                    roleManager.createRequestRoleIntent(RoleManager.ROLE_SMS)
+                )
+                return
             } catch (_: Exception) {
                 // fall through
             }
         }
 
-        // Legacy SMS default chooser (no package extra — package=self is a no-op when already default).
-        try {
-            val changeDefault = Intent(Telephony.Sms.Intents.ACTION_CHANGE_DEFAULT)
-            if (changeDefault.resolveActivity(packageManager) != null) {
-                startActivity(changeDefault)
-                return
-            }
-        } catch (_: Exception) {
-            // fall through
-        }
-
-        // Always-available fallback: full default-apps settings.
+        // Already default (or role request unavailable): open Default apps list.
+        // User taps "SMS app" there to choose Google Messages / another app.
+        Toast.makeText(
+            this,
+            "Tap “SMS app”, then choose Google Messages (or another app).",
+            Toast.LENGTH_LONG
+        ).show()
         openDefaultSmsSettings()
     }
 

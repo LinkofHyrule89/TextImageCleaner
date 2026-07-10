@@ -110,6 +110,12 @@ fun SettingsScreen(
                     onClick = onChangeDefaultSmsApp,
                     modifier = Modifier.fillMaxWidth()
                 ) { Text("Change default SMS app") }
+                Text(
+                    "Opens system Default apps. Tap “SMS app”, then pick Google Messages (or another app).",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 6.dp)
+                )
             }
             Spacer(Modifier.height(8.dp))
             OutlinedButton(
