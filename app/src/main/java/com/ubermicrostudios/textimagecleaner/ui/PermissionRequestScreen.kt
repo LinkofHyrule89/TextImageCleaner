@@ -31,7 +31,11 @@ fun PermissionRequestScreen(state: com.google.accompanist.permissions.MultiplePe
         Icon(Icons.Default.Info, null, Modifier.size(64.dp).padding(bottom = 16.dp))
         Text("Permissions Required", style = MaterialTheme.typography.headlineSmall)
         Spacer(Modifier.height(16.dp))
-        Text("Storage permissions are required to scan and backup media. Please grant them to continue.", textAlign = TextAlign.Center)
+        Text(
+            "SMS and media permissions are required to scan MMS attachments and optionally backup files. " +
+                "Contact names are optional later if you want phone numbers matched to people in the info panel.",
+            textAlign = TextAlign.Center
+        )
         Spacer(Modifier.height(24.dp))
         Button(onClick = { state.launchMultiplePermissionRequest() }) { Text("Grant Permissions") }
     }

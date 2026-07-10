@@ -1,42 +1,122 @@
-**Description:** TextImageCleaner is a modern Android utility application built with Kotlin and Jetpack Compose designed to help users manage storage by efficiently deleting media attachments from MMS messages.
-Unlike standard SMS apps, this tool aggregates all image and video attachments into a single, chronological grid view, allowing for bulk management without needing to scroll through individual conversation threads. It utilizes Android's RoleManager to temporarily acquire Default SMS Handler permissions to perform deletions safely.
+# TextImageCleaner
 
-**Key Features:**
-• Media Aggregation: Scans and groups all MMS images and videos by month and year.
-• Bulk Selection: Select specific items or entire groups for mass deletion.
-• Date Range Filtering: Integrated DateRangePicker to identify and remove media within specific timeframes.
-• Smart Deletion: Option to delete attachments only (keeping the text message body) or remove empty/expired messages entirely.
-• Background Processing: Uses WorkManager to handle large deletion tasks in the background without blocking the UI.
+**Stable 1.0.0** — bulk-clean MMS images and videos on Android 15+.
 
-**Tech Stack:**
-• Kotlin & Coroutines
-• Jetpack Compose (Material3)
-• WorkManager
-• Coil (Image Loading)
-• Accompanist (Permissions)
+TextImageCleaner is a Kotlin / Jetpack Compose utility that finds image and video attachments in system MMS storage, shows them in a single grid (grouped by month), and lets you delete them in bulk—either **attachments only** (keep text) or **move media to an in-app Trash** (with careful full-message cleanup).
 
-**WARNING:** This app is very untested and pre-alpha it's very likely you can and will accidentally delete text messages, pictures, and videos from your system level SMS/MMS storage that you don't intent to use at your own RISK.
+> **History:** Early prototypes used Gemini-assisted “vibe coding.” **1.0.0** is a full refactor and stabilization with **[Grok 4.5](https://x.ai)** via **Grok Build** (xAI): safer deletion semantics, settings, date-range delete, tests, and release docs.
 
-**TLDR:** I made this app because I was tired of the fact Google Messages doesn't have a way to bulk delete old pictures and videos and there wasn't a good way to do it and after a few months the system level message storage was well over 12GB but I've had it get even bigger than that over time. So this was mostly to solve my own problem but I thought I'd share it.
+## Why it exists
 
-Requirement to use the app:
-To use this app you will have to temporarily set the app as the default SMS app since this is the only way to access the message storage. You will not be able to text while it is deleting the images/videos and sometimes this can take a while. i did make it work in the background with a notification though.
+Google Messages still doesn’t offer a good way to bulk-delete years of MMS photos and videos. System message storage can grow to many gigabytes. This app was built to reclaim that space **with explicit confirmations and safer multi-attachment handling**.
 
-## Development Notes — Vibe Coding & Low Token Optimization
+## Requirements
 
-This codebase is being actively optimized for **pleasant AI-assisted development** (especially with Cursor and multi-agent workflows) with a strong focus on **low token usage** during editing and analysis sessions.
+| | |
+|--|--|
+| OS | **Android 15+** (`minSdk 35`) |
+| Role | Temporarily set this app as the **default SMS app** to read/delete MMS |
+| Risk | Deleting message media is irreversible at the system level (except in-app Trash restore of **files** to Gallery—not back into SMS) |
 
-**Goals:**
-- Clear separation of concerns and file boundaries so agents only load relevant context
-- Concise but highly readable modern Kotlin + Compose idioms
-- Reduced visual noise and redundant comments
-- Better navigation (region markers, logical grouping)
-- Architecture that stays friendly to iterative AI refactors
+While this app is the default SMS handler, **it does not deliver SMS/MMS**. Switch back to Google Messages (or your preferred app) when you finish.
 
-Recent work focused on modernizing the build system, extracting a MainViewModel, splitting UI components, and stabilizing the build for reliable CI.
+## Features
+
+- Scan and grid of MMS **images & videos**, grouped by month  
+- Filters: All / Images / Videos  
+- Multi-select (long-press, month headers)  
+- **Date-range delete** (calendar): only months that still have media are selectable  
+- Delete modes: **attachments only** (keep text) or **trash + message rules** (Option A: full MMS removed only if every media part was selected)  
+- Optional **backup to Gallery** before delete (album name configurable in Settings)  
+- **Trash**: original message date/time, message body, restore to Gallery, permanent delete  
+- **Settings**: default SMS controls, backup folder, optional Contacts for names  
+- Info panel: lazy load conversation peers + body; optional Contacts permission  
+- WorkManager background deletion with progress notification  
+- Predictive back on Settings  
+
+## Safety & privacy
+
+- **No full SMS wipe.** Only URIs you select (or that fall in a date-range snapshot) are processed.  
+- **Attachments-only** deletes selected parts only; the text shell remains.  
+- **Trash mode** copies media into private app storage first; the whole MMS is deleted only when **all** media parts of that message were selected. Partial multi-media selection never silently deletes sibling attachments.  
+- Control messages outside your selection are not modified (covered by instrumented safety tests).  
+- Cloud backup excludes trash files and Room DBs (message bodies in trash).  
+- Contacts access is **optional** and only for display names in the info panel.  
+
+See [SECURITY.md](SECURITY.md).
+
+## Install
+
+### Prebuilt APK (recommended)
+
+1. Download the latest APK from **[GitHub Releases](https://github.com/LinkofHyrule89/TextImageCleaner/releases)** (`TextImageCleaner-1.0.0.apk`).  
+2. Install via file manager, or:
+
+```bash
+adb install -r TextImageCleaner-1.0.0.apk
+```
+
+CI also attaches a debug APK to each successful `master` build (Actions → Artifacts).
+
+> The published 1.0.0 build may be **debug-signed** for easy sideload. For Play Store you must sign with your own release keystore.
+
+### Build from source
+
+```bash
+export JAVA_HOME=/path/to/jdk-21   # or 17+
+export ANDROID_HOME=/path/to/Android/Sdk
+./gradlew assembleDebug
+# APK: app/build/outputs/apk/debug/app-debug.apk
+```
+
+## Usage (short)
+
+1. Open the app → set as **default SMS** when prompted → grant permissions.  
+2. Browse media; use filters as needed.  
+3. Long-press to select, or use the **calendar** for a date range.  
+4. Confirm **attachments only** vs trash, optional backup.  
+5. When done, open **Settings** and switch the default SMS app back.
+
+## Testing
+
+**Unit tests (no device):**
+
+```bash
+./gradlew test
+```
+
+**Instrumented tests (device; app must be default SMS for MMS inserts):**
+
+```bash
+chmod +x scripts/run-device-tests.sh
+./scripts/run-device-tests.sh
+# or:
+./gradlew :app:installDebug :app:connectedDebugAndroidTest
+```
+
+Tests insert **synthetic** MMS parts with unique markers and only delete those URIs. They do not wipe your real inbox by design—but always run on a device you control.
+
+## Architecture (map)
+
+```
+app/src/main/java/.../textimagecleaner/
+  MainActivity.kt          UI shell, back stack, dialogs
+  MainViewModel.kt         State, date range, WorkManager enqueue
+  MediaUtils.kt            MMS scan, details, gallery restore
+  DeletionWorker.kt        Trash / part-delete / backup
+  data/                    Room trash + DataStore settings
+  ui/                      Compose screens (cleaner, trash, settings, …)
+```
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 
-This project is licensed under the AGPL-3.0 License. See the [LICENSE](LICENSE) file for details.
+[AGPL-3.0](LICENSE). Commercial / alternative licensing: contact the maintainers.
 
-For commercial inquiries or alternative licensing, please contact the project maintainers.
+## Credits
+
+- Original concept and early code: project author (LinkofHyrule89)  
+- 1.0.0 refactor, tests, and release packaging: **Grok 4.5** with **Grok Build** (xAI)  

@@ -13,3 +13,12 @@
 .externalNativeBuild
 .cxx
 local.properties
+
+# Built APKs (publish via GitHub Releases / CI artifacts)
+*.apk
+*.ap_
+!releases/README.md
+
+# App module build outputs
+app/build/
+build/

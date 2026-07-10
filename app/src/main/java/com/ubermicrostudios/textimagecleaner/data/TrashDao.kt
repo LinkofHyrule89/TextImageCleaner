@@ -13,11 +13,14 @@ import kotlinx.coroutines.flow.Flow
 @Dao
 interface TrashDao {
     /**
-     * Retrieves all items in the trash, sorted by the date they were trashed (newest first).
-     * Returns a Flow for reactive UI updates.
+     * Trash items newest-by-original message date first (conversation time, not trash time).
      */
-    @Query("SELECT * FROM trashed_items ORDER BY trashedDate DESC")
+    @Query("SELECT * FROM trashed_items ORDER BY originalDate DESC")
     fun getAllTrashedItems(): Flow<List<TrashedItem>>
+
+    /** All original MMS part URI strings currently in trash (for excluding from cleaner/calendar). */
+    @Query("SELECT uriString FROM trashed_items")
+    suspend fun getAllUriStrings(): List<String>
 
     /**
      * Inserts a new trashed item record. Replaces if URI already exists.

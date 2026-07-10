@@ -1,7 +1,6 @@
 package com.ubermicrostudios.textimagecleaner.ui
 
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -16,17 +15,19 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.Restore
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -39,7 +40,6 @@ import java.time.Instant
 import java.time.LocalDateTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
-import java.util.Locale
 import kotlinx.coroutines.launch
 
 @Composable
@@ -49,6 +49,10 @@ fun TrashScreen(
     context: android.content.Context,
     coroutineScope: kotlinx.coroutines.CoroutineScope
 ) {
+    var pendingPermanentDelete by remember { mutableStateOf<TrashedItem?>(null) }
+    val dateTimeFmt = remember { DateTimeFormatter.ofPattern("MMM dd, yyyy HH:mm") }
+    val zone = remember { ZoneId.systemDefault() }
+
     if (trashedItems.isEmpty()) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Text("Trash is empty")
@@ -56,28 +60,35 @@ fun TrashScreen(
     } else {
         LazyColumn(Modifier.fillMaxSize()) {
             items(trashedItems, key = { it.uriString }) { item ->
-                var showMessageBody by remember { mutableStateOf(false) }
+                val file = remember(item.fileName) { File(context.filesDir, "trash/${item.fileName}") }
+                val originalLabel = remember(item.originalDate) {
+                    LocalDateTime.ofInstant(Instant.ofEpochMilli(item.originalDate), zone)
+                        .format(dateTimeFmt)
+                }
+                val body = item.messageBody?.trim()?.takeIf { it.isNotEmpty() }
 
                 Column {
                     Row(
-                        Modifier.fillMaxWidth().padding(8.dp).clickable { showMessageBody = !showMessageBody },
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        val file = File(context.filesDir, "trash/${item.fileName}")
                         AsyncImage(
                             model = file,
                             contentDescription = null,
                             contentScale = ContentScale.Crop,
-                            modifier = Modifier.size(64.dp).border(1.dp, Color.Gray)
+                            modifier = Modifier
+                                .size(64.dp)
+                                .border(1.dp, Color.Gray)
                         )
                         Spacer(Modifier.width(12.dp))
                         Column(Modifier.weight(1f)) {
                             Text(item.mimeType, style = MaterialTheme.typography.labelSmall)
-                            val date = LocalDateTime.ofInstant(Instant.ofEpochMilli(item.trashedDate), ZoneId.systemDefault())
-                            Text("Trashed: ${date.format(DateTimeFormatter.ofPattern("MMM dd, HH:mm"))}", style = MaterialTheme.typography.bodySmall)
-                            if (item.messageBody != null) {
-                                Text("Click to view message", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
-                            }
+                            Text(
+                                text = "From: $originalLabel",
+                                style = MaterialTheme.typography.bodySmall
+                            )
                         }
                         IconButton(onClick = {
                             coroutineScope.launch {
@@ -85,22 +96,25 @@ fun TrashScreen(
                                 trashDao.delete(item)
                                 file.delete()
                             }
-                        }) { Icon(Icons.Default.Restore, "Restore") }
-                        IconButton(onClick = {
-                            coroutineScope.launch {
-                                trashDao.delete(item)
-                                file.delete()
-                            }
-                        }) { Icon(Icons.Default.DeleteForever, "Delete Permanently", tint = MaterialTheme.colorScheme.error) }
+                        }) { Icon(Icons.Default.Restore, contentDescription = "Restore") }
+                        IconButton(onClick = { pendingPermanentDelete = item }) {
+                            Icon(
+                                Icons.Default.DeleteForever,
+                                contentDescription = "Delete permanently",
+                                tint = MaterialTheme.colorScheme.error
+                            )
+                        }
                     }
 
-                    if (showMessageBody) {
+                    if (body != null) {
                         Surface(
-                            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 4.dp),
                             color = MaterialTheme.colorScheme.surfaceVariant
                         ) {
                             Text(
-                                text = item.messageBody ?: "(No message text found)",
+                                text = body,
                                 modifier = Modifier.padding(12.dp),
                                 style = MaterialTheme.typography.bodySmall
                             )
@@ -110,5 +124,27 @@ fun TrashScreen(
                 }
             }
         }
+    }
+
+    pendingPermanentDelete?.let { item ->
+        AlertDialog(
+            onDismissRequest = { pendingPermanentDelete = null },
+            title = { Text("Delete permanently?") },
+            text = { Text("This removes the file from Trash and cannot be undone.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    val target = item
+                    pendingPermanentDelete = null
+                    coroutineScope.launch {
+                        val f = File(context.filesDir, "trash/${target.fileName}")
+                        trashDao.delete(target)
+                        f.delete()
+                    }
+                }) { Text("Delete") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingPermanentDelete = null }) { Text("Cancel") }
+            }
+        )
     }
 }
