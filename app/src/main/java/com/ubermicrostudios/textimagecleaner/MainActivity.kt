@@ -2,7 +2,10 @@ package com.ubermicrostudios.textimagecleaner
 
 import android.app.role.RoleManager
 import android.content.Intent
+import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
+import android.provider.Telephony
 import android.widget.Toast
 import androidx.activity.BackEventCompat
 import androidx.activity.ComponentActivity
@@ -138,6 +141,7 @@ class MainActivity : ComponentActivity() {
                         forceBrowseUnlocked = demoMode,
                         openSettingsOnStart = demoScreen == "settings",
                         onRequestDefaultSms = { requestDefaultSmsRole() },
+                        onChangeDefaultSmsApp = { openChangeDefaultSmsApp() },
                         onRequestSystemDefaultSms = { openDefaultSmsSettings() }
                     )
                 }
@@ -170,11 +174,57 @@ class MainActivity : ComponentActivity() {
             !roleManager.isRoleHeld(RoleManager.ROLE_SMS)
         ) {
             roleRequestLauncher.launch(roleManager.createRequestRoleIntent(RoleManager.ROLE_SMS))
+        } else if (roleManager?.isRoleHeld(RoleManager.ROLE_SMS) == true) {
+            // Already default — open the system chooser so the user can switch away.
+            openChangeDefaultSmsApp()
+        } else {
+            openDefaultSmsSettings()
         }
     }
 
+    /**
+     * Opens the system UI to pick the default SMS app (role picker when available).
+     * Do not use ACTION_CHANGE_DEFAULT with our package when we already hold the role —
+     * that is a no-op and shows no dialog on modern Android.
+     */
+    private fun openChangeDefaultSmsApp() {
+        // API 31+: screen for choosing the default app for a given role (SMS list).
+        // Use action strings for broader compile compatibility.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            try {
+                val intent = Intent("android.settings.MANAGE_DEFAULT_APP").apply {
+                    putExtra("android.provider.extra.ROLE_NAME", RoleManager.ROLE_SMS)
+                }
+                if (intent.resolveActivity(packageManager) != null) {
+                    startActivity(intent)
+                    return
+                }
+            } catch (_: Exception) {
+                // fall through
+            }
+        }
+
+        // Legacy SMS default chooser (no package extra — package=self is a no-op when already default).
+        try {
+            val changeDefault = Intent(Telephony.Sms.Intents.ACTION_CHANGE_DEFAULT)
+            if (changeDefault.resolveActivity(packageManager) != null) {
+                startActivity(changeDefault)
+                return
+            }
+        } catch (_: Exception) {
+            // fall through
+        }
+
+        // Always-available fallback: full default-apps settings.
+        openDefaultSmsSettings()
+    }
+
     private fun openDefaultSmsSettings() {
-        startActivity(Intent(android.provider.Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS))
+        try {
+            startActivity(Intent(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS))
+        } catch (_: Exception) {
+            Toast.makeText(this, "Could not open default apps settings", Toast.LENGTH_LONG).show()
+        }
     }
 }
 
@@ -186,6 +236,7 @@ fun SmsAppScreen(
     forceBrowseUnlocked: Boolean = false,
     openSettingsOnStart: Boolean = false,
     onRequestDefaultSms: () -> Unit,
+    onChangeDefaultSmsApp: () -> Unit = onRequestDefaultSms,
     onRequestSystemDefaultSms: () -> Unit
 ) {
     val context = LocalContext.current
@@ -595,6 +646,7 @@ fun SmsAppScreen(
                     showSettings = false
                 },
                 onRequestDefaultSmsRole = onRequestDefaultSms,
+                onChangeDefaultSmsApp = onChangeDefaultSmsApp,
                 onOpenSystemDefaultApps = onRequestSystemDefaultSms,
                 onRequestContactsPermission = {
                     contactsRequestAttempted = true

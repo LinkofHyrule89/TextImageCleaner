@@ -1,9 +1,7 @@
 package com.ubermicrostudios.textimagecleaner.ui.settings
 
-import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
-import android.provider.Telephony
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -43,6 +41,7 @@ fun SettingsScreen(
     contactsPermissionGranted: Boolean,
     onBack: () -> Unit,
     onRequestDefaultSmsRole: () -> Unit,
+    onChangeDefaultSmsApp: () -> Unit,
     onOpenSystemDefaultApps: () -> Unit,
     onRequestContactsPermission: () -> Unit,
     onOpenAppSettings: () -> Unit,
@@ -108,17 +107,7 @@ fun SettingsScreen(
                 ) { Text("Set as default SMS app") }
             } else {
                 Button(
-                    onClick = {
-                        // Prefer change-default intent when available.
-                        try {
-                            val intent = Intent(Telephony.Sms.Intents.ACTION_CHANGE_DEFAULT).apply {
-                                putExtra("package", context.packageName)
-                            }
-                            context.startActivity(intent)
-                        } catch (_: Exception) {
-                            onOpenSystemDefaultApps()
-                        }
-                    },
+                    onClick = onChangeDefaultSmsApp,
                     modifier = Modifier.fillMaxWidth()
                 ) { Text("Change default SMS app") }
             }
