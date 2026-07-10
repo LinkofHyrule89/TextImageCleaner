@@ -58,8 +58,9 @@ See [SECURITY.md](SECURITY.md).
 adb install -r TextImageCleaner-release.apk
 ```
 
-CI attaches a **debug** APK on every `master` build (Actions → Artifacts).  
-Tag builds (`v*`) produce a **release-signed** APK via the Release workflow (keystore stored only in GitHub Secrets).
+Every successful **`master` push** builds a **release-signed** APK (keystore only in GitHub Secrets) and uploads it as the Actions artifact **`TextImageCleaner-release-apk`**.  
+Tag builds (`v*`) attach the same signed APK to the GitHub Release.  
+Pull requests run unit tests only (no secrets / no public unsigned “fake release”).
 
 ### Build from source
 

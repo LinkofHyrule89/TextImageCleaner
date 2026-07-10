@@ -48,31 +48,42 @@ jobs:
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: ./gradlew assembleRelease --stacktrace
 
-      - name: Package and verify APK
+      - name: Verify APK is release-signed
         run: |
-          set -e
+          set -euo pipefail
           APK=$(ls app/build/outputs/apk/release/*.apk | head -1)
           echo "Built: $APK"
-          # jarsigner always available with JDK; apksigner if build-tools present
-          jarsigner -verify -certs "$APK" | head -20
+          jarsigner -verify -strict "$APK"
+          AS=""
           if command -v apksigner >/dev/null 2>&1; then
-            apksigner verify --print-certs "$APK"
+            AS=apksigner
           elif [ -n "${ANDROID_HOME:-}" ]; then
-            AS=$(find "$ANDROID_HOME/build-tools" -name apksigner 2>/dev/null | sort -V | tail -1)
-            if [ -n "$AS" ]; then "$AS" verify --print-certs "$APK"; fi
+            AS=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner 2>/dev/null | sort -V | tail -1 || true)
+          fi
+          if [ -n "$AS" ]; then
+            "$AS" verify --print-certs "$APK" | tee /tmp/apk-certs.txt
+            if grep -qi "CN=Android Debug" /tmp/apk-certs.txt; then
+              echo "::error::APK is signed with the Android debug key"
+              exit 1
+            fi
+            if ! grep -qi "CN=TextImageCleaner" /tmp/apk-certs.txt; then
+              echo "::error::Unexpected certificate CN (expected TextImageCleaner)"
+              exit 1
+            fi
           fi
           cp "$APK" TextImageCleaner-release.apk
           sha256sum TextImageCleaner-release.apk | tee TextImageCleaner-release.apk.sha256
           ls -lh TextImageCleaner-release.apk
 
-      - name: Upload release APK artifact
+      - name: Upload signed release APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: TextImageCleaner-signed-release
+          name: TextImageCleaner-release-apk
           path: |
             TextImageCleaner-release.apk
             TextImageCleaner-release.apk.sha256
           retention-days: 90
+          if-no-files-found: error
 
       - name: Publish GitHub Release assets (version tags)
         if: startsWith(github.ref, 'refs/tags/v')
