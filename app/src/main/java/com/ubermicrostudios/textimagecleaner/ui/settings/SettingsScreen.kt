@@ -41,7 +41,6 @@ fun SettingsScreen(
     contactsPermissionGranted: Boolean,
     onBack: () -> Unit,
     onRequestDefaultSmsRole: () -> Unit,
-    onChangeDefaultSmsApp: () -> Unit,
     onOpenSystemDefaultApps: () -> Unit,
     onRequestContactsPermission: () -> Unit,
     onOpenAppSettings: () -> Unit,
@@ -100,24 +99,22 @@ fun SettingsScreen(
                 style = MaterialTheme.typography.bodyMedium
             )
             Spacer(Modifier.height(8.dp))
+            // When already default, Android does not expose a reliable SMS role picker to third-party
+            // apps — only show "Set as default" when needed. Use system default apps to switch away.
             if (!isDefaultSms) {
                 Button(
                     onClick = onRequestDefaultSmsRole,
                     modifier = Modifier.fillMaxWidth()
                 ) { Text("Set as default SMS app") }
+                Spacer(Modifier.height(8.dp))
             } else {
-                Button(
-                    onClick = onChangeDefaultSmsApp,
-                    modifier = Modifier.fillMaxWidth()
-                ) { Text("Change default SMS app") }
                 Text(
-                    "Opens system Default apps. Tap “SMS app”, then pick Google Messages (or another app).",
+                    "To stop using this app as default SMS, open system Default apps → SMS app → pick Google Messages (or another app).",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 6.dp)
+                    modifier = Modifier.padding(bottom = 8.dp)
                 )
             }
-            Spacer(Modifier.height(8.dp))
             OutlinedButton(
                 onClick = onOpenSystemDefaultApps,
                 modifier = Modifier.fillMaxWidth()

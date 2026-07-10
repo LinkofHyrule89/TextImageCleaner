@@ -141,7 +141,6 @@ class MainActivity : ComponentActivity() {
                         forceBrowseUnlocked = demoMode,
                         openSettingsOnStart = demoScreen == "settings",
                         onRequestDefaultSms = { requestDefaultSmsRole() },
-                        onChangeDefaultSmsApp = { openChangeDefaultSmsApp() },
                         onRequestSystemDefaultSms = { openDefaultSmsSettings() }
                     )
                 }
@@ -174,53 +173,10 @@ class MainActivity : ComponentActivity() {
             !roleManager.isRoleHeld(RoleManager.ROLE_SMS)
         ) {
             roleRequestLauncher.launch(roleManager.createRequestRoleIntent(RoleManager.ROLE_SMS))
-        } else if (roleManager?.isRoleHeld(RoleManager.ROLE_SMS) == true) {
-            // Already default — open the system chooser so the user can switch away.
-            openChangeDefaultSmsApp()
         } else {
+            // Already default or role unavailable — Settings UI hides "change" when default.
             openDefaultSmsSettings()
         }
-    }
-
-    /**
-     * Opens system UI so the user can pick a different default SMS app.
-     *
-     * When this app already holds ROLE_SMS:
-     * - RoleManager.createRequestRoleIntent / ACTION_CHANGE_DEFAULT often finish immediately
-     *   with no UI (already holder).
-     * - android.intent.action.MANAGE_DEFAULT_APP resolves to DefaultAppActivity but requires
-     *   MANAGE_ROLE_HOLDERS, so third-party apps cannot show that screen (silent failure).
-     *
-     * The reliable path is the Default apps list (same as "Open system default apps"),
-     * with a short hint to open the SMS app entry.
-     */
-    private fun openChangeDefaultSmsApp() {
-        val roleManager = getSystemService(RoleManager::class.java)
-        val alreadyDefault = roleManager?.isRoleHeld(RoleManager.ROLE_SMS) == true
-
-        if (!alreadyDefault &&
-            roleManager != null &&
-            roleManager.isRoleAvailable(RoleManager.ROLE_SMS)
-        ) {
-            // Not default yet: system role request dialog works.
-            try {
-                roleRequestLauncher.launch(
-                    roleManager.createRequestRoleIntent(RoleManager.ROLE_SMS)
-                )
-                return
-            } catch (_: Exception) {
-                // fall through
-            }
-        }
-
-        // Already default (or role request unavailable): open Default apps list.
-        // User taps "SMS app" there to choose Google Messages / another app.
-        Toast.makeText(
-            this,
-            "Tap “SMS app”, then choose Google Messages (or another app).",
-            Toast.LENGTH_LONG
-        ).show()
-        openDefaultSmsSettings()
     }
 
     private fun openDefaultSmsSettings() {
@@ -240,7 +196,6 @@ fun SmsAppScreen(
     forceBrowseUnlocked: Boolean = false,
     openSettingsOnStart: Boolean = false,
     onRequestDefaultSms: () -> Unit,
-    onChangeDefaultSmsApp: () -> Unit = onRequestDefaultSms,
     onRequestSystemDefaultSms: () -> Unit
 ) {
     val context = LocalContext.current
@@ -650,7 +605,6 @@ fun SmsAppScreen(
                     showSettings = false
                 },
                 onRequestDefaultSmsRole = onRequestDefaultSms,
-                onChangeDefaultSmsApp = onChangeDefaultSmsApp,
                 onOpenSystemDefaultApps = onRequestSystemDefaultSms,
                 onRequestContactsPermission = {
                     contactsRequestAttempted = true
