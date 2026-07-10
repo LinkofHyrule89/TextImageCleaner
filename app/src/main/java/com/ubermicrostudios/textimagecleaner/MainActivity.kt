@@ -2,10 +2,8 @@ package com.ubermicrostudios.textimagecleaner
 
 import android.app.role.RoleManager
 import android.content.Intent
-import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
-import android.provider.Telephony
 import android.widget.Toast
 import androidx.activity.BackEventCompat
 import androidx.activity.ComponentActivity
