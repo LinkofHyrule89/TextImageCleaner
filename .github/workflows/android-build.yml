@@ -96,18 +96,23 @@ jobs:
         else
           echo "apksigner not found; jarsigner -strict passed"
         fi
-        cp "$APK" TextImageCleaner-release.apk
-        sha256sum TextImageCleaner-release.apk | tee TextImageCleaner-release.apk.sha256
-        ls -lh TextImageCleaner-release.apk
+        # Single clear name for downloaders (version from Gradle)
+        VER=$(grep versionName app/build.gradle.kts | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+        OUT="TextImageCleaner-${VER}.apk"
+        cp "$APK" "$OUT"
+        sha256sum "$OUT" | tee "${OUT}.sha256"
+        ls -lh "$OUT"
+        echo "SIGNED_APK=$OUT" >> "$GITHUB_ENV"
 
     - name: Upload signed release APK
       if: github.event_name == 'push'
       uses: actions/upload-artifact@v4
       with:
-        name: TextImageCleaner-release-apk
+        # One artifact bundle: the signed APK (+ checksum). Not a debug build.
+        name: TextImageCleaner-signed-apk
         path: |
-          TextImageCleaner-release.apk
-          TextImageCleaner-release.apk.sha256
+          TextImageCleaner-*.apk
+          TextImageCleaner-*.apk.sha256
         retention-days: 90
         if-no-files-found: error
 

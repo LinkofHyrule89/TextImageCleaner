@@ -1,19 +1,23 @@
 # Releases
 
-Installable APKs are published on **GitHub Releases**:
+**Download page:** https://github.com/LinkofHyrule89/TextImageCleaner/releases
 
-https://github.com/LinkofHyrule89/TextImageCleaner/releases
+### v1.0.0
 
-| Asset | Signing |
-|-------|---------|
-| `TextImageCleaner-release.apk` | **Release** keystore (CI secrets / local maintainer key) |
-| `TextImageCleaner-1.0.0.apk` (legacy) | Debug (early sideload) |
+Only **one** installable file is published:
+
+| Asset | Notes |
+|-------|--------|
+| `TextImageCleaner-1.0.0.apk` | **Release-signed** production key |
+| `TextImageCleaner-1.0.0.apk.sha256` | Checksum |
+
+There is no separate “debug” or “release”-named APK on the release page — that avoided confusion.
 
 ### Local builds
 
 ```bash
-./gradlew assembleDebug     # debug-signed
-./gradlew assembleRelease   # needs keystore.properties or KEYSTORE_* env (see README)
+./gradlew assembleDebug     # debug key (dev only)
+./gradlew assembleRelease   # needs keystore.properties or KEYSTORE_* env
 ```
 
-Large APKs are gitignored. Use Releases or CI artifacts.
+APK binaries are gitignored; use GitHub Releases or CI artifacts.
