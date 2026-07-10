@@ -128,6 +128,16 @@ app/src/main/java/.../textimagecleaner/
   ui/                      Compose screens (cleaner, trash, settings, …)
 ```
 
+## Screenshots
+
+Synthetic demo media only (not real messages):
+
+| Cleaner | Selection | Settings | Trash |
+|---------|-----------|----------|-------|
+| ![Cleaner](docs/screenshots/01-cleaner-grid.png) | ![Selection](docs/screenshots/02-selection.png) | ![Settings](docs/screenshots/03-settings.png) | ![Trash](docs/screenshots/04-trash.png) |
+
+Regenerate: `./scripts/capture-screenshots.sh` (uses `adb` + `demo_mode` intent).
+
 ## Changelog
 
 See [CHANGELOG.md](CHANGELOG.md).

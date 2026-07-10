@@ -100,6 +100,8 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         isDefault = isDefaultSmsApp()
+        val demoMode = intent?.getBooleanExtra(EXTRA_DEMO_MODE, false) == true
+        val demoScreen = intent?.getStringExtra(EXTRA_DEMO_SCREEN)
 
         setContent {
             TextImageCleanerTheme {
@@ -107,9 +109,34 @@ class MainActivity : ComponentActivity() {
                     val viewModel: MainViewModel = viewModel {
                         MainViewModel(applicationContext)
                     }
+                    // Demo mode: synthetic media only (screenshots / marketing). Never reads MMS.
+                    LaunchedEffect(demoMode, demoScreen) {
+                        if (demoMode) {
+                            viewModel.enableDemoMode()
+                            when (demoScreen) {
+                                "trash" -> {
+                                    viewModel.seedDemoTrash()
+                                }
+                                "selection" -> {
+                                    viewModel.loadMedia()
+                                    kotlinx.coroutines.delay(600)
+                                    viewModel.applyDemoSelection(4)
+                                }
+                                "settings" -> {
+                                    viewModel.loadMedia()
+                                }
+                                else -> {
+                                    viewModel.loadMedia()
+                                    viewModel.currentTab = AppTab.CLEANER
+                                }
+                            }
+                        }
+                    }
                     SmsAppScreen(
                         viewModel = viewModel,
-                        isDefault = isDefault,
+                        isDefault = isDefault || demoMode,
+                        forceBrowseUnlocked = demoMode,
+                        openSettingsOnStart = demoScreen == "settings",
                         onRequestDefaultSms = { requestDefaultSmsRole() },
                         onRequestSystemDefaultSms = { openDefaultSmsSettings() }
                     )
@@ -120,7 +147,15 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        isDefault = isDefaultSmsApp()
+        // Keep demo session unlocked when launched for screenshots.
+        if (intent?.getBooleanExtra(EXTRA_DEMO_MODE, false) != true) {
+            isDefault = isDefaultSmsApp()
+        }
+    }
+
+    companion object {
+        const val EXTRA_DEMO_MODE = "demo_mode"
+        const val EXTRA_DEMO_SCREEN = "demo_screen"
     }
 
     private fun isDefaultSmsApp(): Boolean {
@@ -148,6 +183,8 @@ class MainActivity : ComponentActivity() {
 fun SmsAppScreen(
     viewModel: MainViewModel,
     isDefault: Boolean,
+    forceBrowseUnlocked: Boolean = false,
+    openSettingsOnStart: Boolean = false,
     onRequestDefaultSms: () -> Unit,
     onRequestSystemDefaultSms: () -> Unit
 ) {
@@ -157,7 +194,13 @@ fun SmsAppScreen(
     val database = remember { AppDatabase.getDatabase(context) }
     val trashDao = database.trashDao()
 
-    val trashedItems by trashDao.getAllTrashedItems().collectAsState(initial = emptyList())
+    val trashedItemsRaw by trashDao.getAllTrashedItems().collectAsState(initial = emptyList())
+    // Demo screenshots: never show real trash rows (only synthetic demo:// entries).
+    val trashedItems = if (viewModel.demoMode) {
+        trashedItemsRaw.filter { it.uriString.startsWith("demo://") }
+    } else {
+        trashedItemsRaw
+    }
     val totalTrashedSize by trashDao.getTotalTrashedSize().collectAsState(initial = 0L)
 
     val permissionsToRequest = remember {
@@ -198,14 +241,15 @@ fun SmsAppScreen(
             .build()
     }
 
-    val canBrowseMedia = isDefault && permissionsState.allPermissionsGranted
+    val canBrowseMedia =
+        forceBrowseUnlocked || (isDefault && permissionsState.allPermissionsGranted)
     var pendingDeleteAction by remember { mutableStateOf<DeleteAction?>(null) }
     var showEmptyTrashConfirm by remember { mutableStateOf(false) }
-    var showSettings by remember { mutableStateOf(false) }
+    var showSettings by remember { mutableStateOf(openSettingsOnStart) }
     var showDateRangeDelete by remember { mutableStateOf(false) }
     val backupFolderName by viewModel.backupFolderName.collectAsState()
 
-    LaunchedEffect(canBrowseMedia) {
+    LaunchedEffect(canBrowseMedia, viewModel.demoMode) {
         if (canBrowseMedia) viewModel.loadMedia()
     }
 
@@ -417,6 +461,44 @@ fun SmsAppScreen(
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
             when {
+                // Demo mode bypasses role/permission gates (synthetic media only).
+                forceBrowseUnlocked && viewModel.currentTab == AppTab.TRASH -> TrashScreen(
+                    trashedItems = trashedItems,
+                    trashDao = trashDao,
+                    context = context,
+                    coroutineScope = coroutineScope
+                )
+                forceBrowseUnlocked && viewModel.isLoadingMedia && viewModel.mediaList.isEmpty() -> {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator()
+                    }
+                }
+                forceBrowseUnlocked -> {
+                    Column(Modifier.fillMaxSize()) {
+                        if (viewModel.showMessageOption && viewModel.selectedItems.size == 1) {
+                            SelectionDetailsPanel(
+                                isLoading = viewModel.isLoadingDetails,
+                                details = viewModel.selectedDetails,
+                                contactsPermissionGranted = true,
+                                onRequestContactsPermission = {},
+                                showOpenSettingsForContacts = false
+                            )
+                        }
+                        val filter = viewModel.mediaTypeFilter
+                        val mediaSnapshot = viewModel.mediaList
+                        CleanerScreen(
+                            groupedMedia = viewModel.groupedMedia,
+                            selectionMode = viewModel.selectionMode,
+                            onSelectionModeChange = {
+                                if (it) viewModel.enterSelectionMode() else viewModel.exitSelectionMode()
+                            },
+                            selectedItems = viewModel.selectedItems,
+                            onSelectedItemsChange = { viewModel.selectedItems = it },
+                            imageLoader = imageLoader,
+                            contentKey = "demo-${filter.name}-${mediaSnapshot.size}-${viewModel.selectionMode}"
+                        )
+                    }
+                }
                 !isDefault -> DefaultAppExplanation(onRequestDefaultSms)
                 !permissionsState.allPermissionsGranted -> PermissionRequestScreen(permissionsState)
                 viewModel.currentTab == AppTab.TRASH -> TrashScreen(

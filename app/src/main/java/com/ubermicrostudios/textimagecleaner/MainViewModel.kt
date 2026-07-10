@@ -14,6 +14,7 @@ import androidx.work.WorkManager
 import androidx.work.workDataOf
 import com.ubermicrostudios.textimagecleaner.data.AppDatabase
 import com.ubermicrostudios.textimagecleaner.data.SettingsRepository
+import com.ubermicrostudios.textimagecleaner.data.TrashedItem
 import java.io.File
 import java.time.Instant
 import java.time.YearMonth
@@ -158,20 +159,34 @@ class MainViewModel(context: Context) : ViewModel() {
     val selectedSizeBytes: Long
         get() = mediaList.filter { it.uri in selectedItems }.sumOf { it.size }
 
+    /** When true, cleaner uses synthetic demo media (screenshots) — never real MMS. */
+    var demoMode: Boolean by mutableStateOf(false)
+        private set
+
+    fun enableDemoMode() {
+        demoMode = true
+    }
+
     fun loadMedia() {
         if (isLoadingMedia) return
         viewModelScope.launch {
             isLoadingMedia = true
             try {
-                // Exclude anything already in trash so cleaner + calendar never re-offer it.
-                val trashUris = withContext(Dispatchers.IO) {
-                    trashDao.getAllUriStrings().toHashSet()
-                }
-                val loaded = MediaUtils.loadMmsMedia(appContext.contentResolver)
-                mediaList = if (trashUris.isEmpty()) {
-                    loaded
+                if (demoMode) {
+                    mediaList = withContext(Dispatchers.IO) {
+                        DemoMediaFactory.createDemoMedia(appContext)
+                    }
                 } else {
-                    loaded.filter { it.uri.toString() !in trashUris }
+                    // Exclude anything already in trash so cleaner + calendar never re-offer it.
+                    val trashUris = withContext(Dispatchers.IO) {
+                        trashDao.getAllUriStrings().toHashSet()
+                    }
+                    val loaded = MediaUtils.loadMmsMedia(appContext.contentResolver)
+                    mediaList = if (trashUris.isEmpty()) {
+                        loaded
+                    } else {
+                        loaded.filter { it.uri.toString() !in trashUris }
+                    }
                 }
                 // Drop selection for items that disappeared (e.g. just trashed).
                 if (selectedItems.isNotEmpty()) {
@@ -183,6 +198,47 @@ class MainViewModel(context: Context) : ViewModel() {
                 isLoadingMedia = false
                 hasCompletedInitialLoad = true
             }
+        }
+    }
+
+    /** Seed in-memory trash-like selection for demo screenshots only. */
+    fun applyDemoSelection(count: Int = 3) {
+        val pick = mediaList.take(count).map { it.uri }.toSet()
+        if (pick.isNotEmpty()) {
+            enterSelectionMode()
+            selectedItems = pick
+        }
+    }
+
+    /**
+     * Writes a few synthetic trash rows + files for screenshots.
+     * Does not read or delete real MMS.
+     */
+    fun seedDemoTrash() {
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                val demoItems = DemoMediaFactory.createDemoMedia(appContext, count = 4)
+                demoItems.take(3).forEachIndexed { i, media ->
+                    val name = "demo_trash_$i.jpg"
+                    val dest = File(appContext.filesDir, "trash/$name")
+                    dest.parentFile?.mkdirs()
+                    val srcPath = media.uri.path ?: return@forEachIndexed
+                    val src = File(srcPath)
+                    if (src.exists()) src.copyTo(dest, overwrite = true)
+                    trashDao.insert(
+                        TrashedItem(
+                            uriString = "demo://trash/$name",
+                            fileName = name,
+                            mimeType = media.mimeType,
+                            originalDate = media.date,
+                            trashedDate = System.currentTimeMillis() - i * 3_600_000L,
+                            fileSize = dest.length(),
+                            messageBody = media.body ?: "Demo conversation text (not real)."
+                        )
+                    )
+                }
+            }
+            currentTab = AppTab.TRASH
         }
     }
 

@@ -201,7 +201,7 @@ fun SettingsScreen(
             SectionTitle("About")
             Text("TextImageCleaner $versionName", style = MaterialTheme.typography.bodyMedium)
             Text(
-                "Licensed under AGPL-3.0. Pre-alpha — use at your own risk.",
+                "Licensed under AGPL-3.0. Stable 1.0.0 — delete media carefully.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 4.dp)
