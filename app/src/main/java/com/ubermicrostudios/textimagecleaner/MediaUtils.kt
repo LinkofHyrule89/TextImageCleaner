@@ -98,7 +98,15 @@ object MediaUtils {
                     0L
                 }
                 
-                mediaItems.add(MediaItem(uri, date, cursor.getString(typeCol), if (size < 0) 0L else size, body))
+                mediaItems.add(
+                    MediaItem(
+                        uri = uri,
+                        mimeType = cursor.getString(typeCol),
+                        size = if (size < 0) 0L else size,
+                        date = date,
+                        body = body
+                    )
+                )
             }
         }
         // Return sorted newest first for the UI grid

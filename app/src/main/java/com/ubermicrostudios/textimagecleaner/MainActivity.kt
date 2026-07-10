@@ -23,6 +23,7 @@ import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Videocam
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -32,13 +33,16 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -103,7 +107,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-@OptIn(ExperimentalPermissionsApi::class)
+@OptIn(ExperimentalPermissionsApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun SmsAppScreen(
     viewModel: MainViewModel,
@@ -139,6 +143,13 @@ fun SmsAppScreen(
             .build()
     }
 
+    val canBrowseMedia = isDefault && permissionsState.allPermissionsGranted
+
+    // Load MMS media once default-SMS + permissions are ready; reloads when those change.
+    LaunchedEffect(canBrowseMedia) {
+        if (canBrowseMedia) viewModel.loadMedia()
+    }
+
     if (viewModel.showDeleteProgressScreen) {
         DeletionProgressOverlay(
             totalToDelete = viewModel.totalToDelete,
@@ -156,18 +167,21 @@ fun SmsAppScreen(
                 TopAppBar(
                     title = { Text(if (viewModel.currentTab == AppTab.CLEANER) "Cleaner" else "Trash Can") },
                     actions = {
-                        if (isDefault && permissionsState.allPermissionsGranted) {
+                        if (canBrowseMedia) {
                             if (viewModel.currentTab == AppTab.CLEANER && !viewModel.selectionMode) {
-                                IconButton(onClick = { viewModel.setMediaTypeFilter(MediaTypeFilter.ALL) }) {
+                                IconButton(onClick = { viewModel.mediaTypeFilter = MediaTypeFilter.ALL }) {
                                     Icon(Icons.Default.PhotoLibrary, contentDescription = "All")
                                 }
-                                IconButton(onClick = { viewModel.setMediaTypeFilter(MediaTypeFilter.IMAGES) }) {
+                                IconButton(onClick = { viewModel.mediaTypeFilter = MediaTypeFilter.IMAGES }) {
                                     Icon(Icons.Default.Image, contentDescription = "Images")
                                 }
-                                IconButton(onClick = { viewModel.setMediaTypeFilter(MediaTypeFilter.VIDEOS) }) {
+                                IconButton(onClick = { viewModel.mediaTypeFilter = MediaTypeFilter.VIDEOS }) {
                                     Icon(Icons.Default.Videocam, contentDescription = "Videos")
                                 }
-                                IconButton(onClick = { /* refresh */ }) {
+                                IconButton(
+                                    onClick = { viewModel.loadMedia() },
+                                    enabled = !viewModel.isLoadingMedia
+                                ) {
                                     Icon(Icons.Default.Refresh, contentDescription = "Refresh")
                                 }
                             }
@@ -185,13 +199,13 @@ fun SmsAppScreen(
             NavigationBar {
                 NavigationBarItem(
                     selected = viewModel.currentTab == AppTab.CLEANER,
-                    onClick = { viewModel.setCurrentTab(AppTab.CLEANER) },
-                    icon = { Icon(Icons.Default.Refresh, null) },
+                    onClick = { viewModel.currentTab = AppTab.CLEANER },
+                    icon = { Icon(Icons.Default.PhotoLibrary, null) },
                     label = { Text("Cleaner") }
                 )
                 NavigationBarItem(
                     selected = viewModel.currentTab == AppTab.TRASH,
-                    onClick = { viewModel.setCurrentTab(AppTab.TRASH) },
+                    onClick = { viewModel.currentTab = AppTab.TRASH },
                     icon = { Icon(Icons.Default.History, null) },
                     label = { Text("Trash") }
                 )
@@ -205,14 +219,24 @@ fun SmsAppScreen(
                 PermissionRequestScreen(permissionsState)
             } else {
                 when (viewModel.currentTab) {
-                    AppTab.CLEANER -> CleanerScreen(
-                        groupedMedia = emptyList(),
-                        selectionMode = viewModel.selectionMode,
-                        onSelectionModeChange = { if (it) viewModel.enterSelectionMode() else viewModel.exitSelectionMode() },
-                        selectedItems = viewModel.selectedItems,
-                        onSelectedItemsChange = { viewModel.selectedItems = it },
-                        imageLoader = imageLoader
-                    )
+                    AppTab.CLEANER -> {
+                        if (viewModel.isLoadingMedia && viewModel.mediaList.isEmpty()) {
+                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                CircularProgressIndicator()
+                            }
+                        } else {
+                            CleanerScreen(
+                                groupedMedia = viewModel.groupedMedia,
+                                selectionMode = viewModel.selectionMode,
+                                onSelectionModeChange = {
+                                    if (it) viewModel.enterSelectionMode() else viewModel.exitSelectionMode()
+                                },
+                                selectedItems = viewModel.selectedItems,
+                                onSelectedItemsChange = { viewModel.selectedItems = it },
+                                imageLoader = imageLoader
+                            )
+                        }
+                    }
                     AppTab.TRASH -> TrashScreen(
                         trashedItems = trashedItems,
                         trashDao = trashDao,

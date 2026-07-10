@@ -8,12 +8,18 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.workDataOf
 import com.ubermicrostudios.textimagecleaner.data.AppDatabase
 import java.io.File
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.util.Locale
 import java.util.UUID
+import kotlinx.coroutines.launch
 
 // Types moved here for visibility
 enum class AppTab { CLEANER, TRASH }
@@ -23,7 +29,8 @@ data class MediaItem(
     val uri: Uri,
     val mimeType: String,
     val size: Long,
-    val date: Long
+    val date: Long,
+    val body: String? = null
 )
 
 sealed class DeleteAction {
@@ -33,8 +40,10 @@ sealed class DeleteAction {
 
 data class GroupedMediaItems(
     val groupTitle: String,
-    val uris: List<Uri>
-)
+    val items: List<MediaItem>
+) {
+    val uris: List<Uri> get() = items.map { it.uri }
+}
 
 class MainViewModel(private val context: Context) : ViewModel() {
 
@@ -44,12 +53,13 @@ class MainViewModel(private val context: Context) : ViewModel() {
 
     // State - using proper delegates
     var currentTab: AppTab by mutableStateOf(AppTab.CLEANER)
-        private set
 
     var mediaList: List<MediaItem> by mutableStateOf(emptyList())
         private set
 
     var mediaTypeFilter: MediaTypeFilter by mutableStateOf(MediaTypeFilter.ALL)
+
+    var isLoadingMedia: Boolean by mutableStateOf(false)
         private set
 
     var selectedItems: Set<Uri> by mutableStateOf(emptySet())
@@ -87,8 +97,30 @@ class MainViewModel(private val context: Context) : ViewModel() {
             else -> mediaList
         }
 
-    fun setCurrentTab(tab: AppTab) { currentTab = tab }
-    fun setMediaTypeFilter(filter: MediaTypeFilter) { mediaTypeFilter = filter }
+    /** Groups filtered media by month/year for the cleaner grid. */
+    val groupedMedia: List<GroupedMediaItems>
+        get() {
+            val monthYear = DateTimeFormatter.ofPattern("MMMM yyyy", Locale.getDefault())
+            return filteredMediaList
+                .groupBy { item ->
+                    Instant.ofEpochMilli(item.date)
+                        .atZone(ZoneId.systemDefault())
+                        .format(monthYear)
+                }
+                .map { (title, items) -> GroupedMediaItems(title, items) }
+        }
+
+    fun loadMedia() {
+        if (isLoadingMedia) return
+        viewModelScope.launch {
+            isLoadingMedia = true
+            try {
+                mediaList = MediaUtils.loadMmsMedia(context.contentResolver)
+            } finally {
+                isLoadingMedia = false
+            }
+        }
+    }
 
     fun toggleItemSelection(uri: Uri) {
         val newSet = selectedItems.toMutableSet()
