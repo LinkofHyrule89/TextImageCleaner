@@ -2,6 +2,22 @@
 
 **Stable 1.0.0** — bulk-clean MMS images and videos on Android 15+.
 
+TextImageCleaner is a Kotlin / Jetpack Compose utility that finds image and video attachments in system MMS storage, shows them in a single grid (grouped by month), and lets you delete them in bulk—either **attachments only** (keep text) or **move media to an in-app Trash** (with careful full-message cleanup).
+
+## Features
+
+- Scan and grid of MMS **images & videos**, grouped by month
+- Filters: All / Images / Videos
+- Multi-select (long-press, month headers)
+- **Date-range delete** (calendar): only months that still have media are selectable
+- Delete modes: **attachments only** (keep text) or **trash + message rules** (Option A: full MMS removed only if every media part was selected)
+- Optional **backup to Gallery** before delete (album name configurable in Settings)
+- **Trash**: original message date/time, message body, restore to Gallery, permanent delete
+- **Settings**: default SMS controls, backup folder, optional Contacts for names
+- Info panel: lazy load conversation peers + body; optional Contacts permission
+- WorkManager background deletion with progress notification
+- Predictive back on Settings
+
 ## Screenshots
 
 Synthetic demo media only (not real messages).
@@ -15,10 +31,6 @@ Synthetic demo media only (not real messages).
 | ![Settings](docs/screenshots/03-settings.png) | ![Trash](docs/screenshots/04-trash.png) |
 
 Regenerate: `./scripts/capture-screenshots.sh` (`demo_mode` — never reads real MMS).
-
----
-
-TextImageCleaner is a Kotlin / Jetpack Compose utility that finds image and video attachments in system MMS storage, shows them in a single grid (grouped by month), and lets you delete them in bulk—either **attachments only** (keep text) or **move media to an in-app Trash** (with careful full-message cleanup).
 
 > **History:** Early prototypes used Gemini-assisted “vibe coding.” **1.0.0** is a full refactor and stabilization with **[Grok 4.5](https://x.ai)** via **Grok Build** (xAI): safer deletion semantics, settings, date-range delete, tests, and release docs.
 
@@ -51,20 +63,6 @@ Google Messages still doesn’t offer a good way to bulk-delete years of MMS pho
 | Risk | Deleting message media is irreversible at the system level (except in-app Trash restore of **files** to Gallery—not back into SMS) |
 
 While this app is the default SMS handler, **it does not deliver SMS/MMS**. Switch back to Google Messages (or your preferred app) when you finish.
-
-## Features
-
-- Scan and grid of MMS **images & videos**, grouped by month  
-- Filters: All / Images / Videos  
-- Multi-select (long-press, month headers)  
-- **Date-range delete** (calendar): only months that still have media are selectable  
-- Delete modes: **attachments only** (keep text) or **trash + message rules** (Option A: full MMS removed only if every media part was selected)  
-- Optional **backup to Gallery** before delete (album name configurable in Settings)  
-- **Trash**: original message date/time, message body, restore to Gallery, permanent delete  
-- **Settings**: default SMS controls, backup folder, optional Contacts for names  
-- Info panel: lazy load conversation peers + body; optional Contacts permission  
-- WorkManager background deletion with progress notification  
-- Predictive back on Settings  
 
 ## Safety & privacy
 
