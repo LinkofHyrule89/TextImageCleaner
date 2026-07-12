@@ -22,13 +22,12 @@ TextImageCleaner is a Kotlin / Jetpack Compose utility that finds image and vide
 
 Synthetic demo media only (not real messages).
 
-| Cleaner | Selection |
-|---------|-----------|
-| ![Cleaner grid](docs/screenshots/01-cleaner-grid.png) | ![Selection mode](docs/screenshots/02-selection.png) |
-
-| Settings | Trash |
-|----------|-------|
-| ![Settings](docs/screenshots/03-settings.png) | ![Trash](docs/screenshots/04-trash.png) |
+<p>
+<img src="docs/screenshots/01-cleaner-grid.png" alt="Cleaner grid" width="140" />
+<img src="docs/screenshots/02-selection.png" alt="Selection mode" width="140" />
+<img src="docs/screenshots/03-settings.png" alt="Settings" width="140" />
+<img src="docs/screenshots/04-trash.png" alt="Trash" width="140" />
+</p>
 
 Regenerate: `./scripts/capture-screenshots.sh` (`demo_mode` — never reads real MMS).
 
