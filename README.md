@@ -2,8 +2,6 @@
 
 **Stable 1.0.0** — bulk-clean MMS images and videos on Android 15+.
 
-**Discord / social link previews:** use [`docs/social-preview.png`](docs/social-preview.png). Upload it once under **Repo Settings → Social preview** so Discord shows a screenshot card instead of a long plain text embed. Regenerate with `python3 scripts/generate-social-preview.py`. Discord caches hard — try `?v=2` on the URL if an old preview sticks.
-
 ## Screenshots
 
 Synthetic demo media only (not real messages).
